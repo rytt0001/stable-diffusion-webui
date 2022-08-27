@@ -2,17 +2,25 @@ Features:
 
 * Gradio GUI: Idiot-proof, fully featured frontend for both txt2img and img2img generation
 * No more manually typing parameters, now all you have to do is write your prompt and adjust sliders
-* :fire::fire: Mask and crop :fire::fire:
+* :fire: :fire: Optimized support!! :fire: :fire:
+* 🔥 NEW! [webui.cmd](https://github.com/hlky/stable-diffusion) updates with any changes in environment.yaml file so the environment will always be up to date as long as you get the new environment.yaml file 🔥
+:fire: no need to remove environment, delete src folder and create again, MUCH simpler! 🔥
+* GFPGAN Face Correction 🔥: [Download the model](https://github.com/hlky/stable-diffusion-webui#gfpgan)Automatically correct distorted faces with a built-in GFPGAN option, fixes them in less than half a second 
+* RealESRGAN Upscaling 🔥: [Download the models](https://github.com/hlky/stable-diffusion-webui#realesrgan) Boosts the resolution of images with a built-in RealESRGAN option 
+* :computer: esrgan/gfpgan on cpu support :computer:
 * Textual inversion 🔥: [info](https://textual-inversion.github.io/) - requires enabling, see [here](https://github.com/hlky/sd-enable-textual-inversion), script works as usual without it enabled
+* Advanced img2img editor :art: :fire: :art:
+* :fire::fire: Mask and crop :fire::fire:
 * Mask painting (NEW) 🖌️: Powerful tool for re-generating only specific parts of an image you want to change
+* More k_diffusion samplers 🔥🔥 : Far greater quality outputs than the default sampler, less distortion and more accurate
+* txt2img samplers: "DDIM", "PLMS", 'k_dpm_2_a', 'k_dpm_2', 'k_euler_a', 'k_euler', 'k_heun', 'k_lms'
+* img2img samplers: "DDIM", 'k_dpm_2_a', 'k_dpm_2', 'k_euler_a', 'k_euler', 'k_heun', 'k_lms'
 * Loopback (NEW) ➿: Automatically feed the last generated sample back into img2img
 * Prompt Weighting (NEW) 🏋️: Adjust the strength of different terms in your prompt
-* GFPGAN Face Correction 🔥: Automatically correct distorted faces with a built-in GFPGAN option, fixes them in less than half a second
-* RealESRGAN Upscaling 🔥: Boosts the resolution of images with a built-in RealESRGAN option
-* More k_diffusion samplers 🔥🔥 : Far greater quality outputs than the default sampler, less distortion and more accurate
-* CFG: Classifier free guidance scale, a feature for fine-tuning your output
+* :fire: gpu device selectable with --gpu <id> :fire:
 * Memory Monitoring 🔥: Shows Vram usage and generation time after outputting.
 * Word Seeds 🔥: Use words instead of seed numbers
+* CFG: Classifier free guidance scale, a feature for fine-tuning your output
 * Launcher Automatic 👑🔥 shortcut to load the model, no more typing in Conda
 * Lighter on Vram: 512x512 img2img & txt2img tested working on 6gb
 * and ????
@@ -22,27 +30,23 @@ A browser interface based on Gradio library for Stable Diffusion.
 
 Original script with Gradio UI was written by a kind anonymopus user. This is a modification.
 
-![](screenshot.png)
+![](images/txt2img.jpg)
+
+![](images/img2img.jpg)
+
+![](images/gfpgan.jpg)
+
+![](images/esrgan.jpg)
 
 ### GFPGAN
 
 If you want to use GFPGAN to improve generated faces, you need to install it separately.
-Follow instructions from https://github.com/TencentARC/GFPGAN, but when cloning it, do so into Stable Diffusion main directory, `/sd`.
-After that download [GFPGANv1.3.pth](https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.3.pth) and put it
-into the `/sd/GFPGAN/experiments/pretrained_models` directory. If you're getting troubles with GFPGAN support, follow instructions
-from the GFPGAN's repository until `inference_gfpgan.py` script works.
-
-If the GFPGAN directory does not exist, you will not get the option to use GFPGAN in the UI. If it does exist, you will either be able
-to use it, or there will be a message in console with an error related to GFPGAN.
+Download [GFPGANv1.3.pth](https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.3.pth) and put it
+into the `/stable-diffusion/src/gfpgan/experiments/pretrained_models` directory. 
 
 ### RealESRGAN
-If you want to use RealESRGAN to upscale generated images, you need to install it separately.
-Follow instructions from https://github.com/xinntao/Real-ESRGAN, but when cloning it, do so into Stable Diffusion main directory, `/sd`.
-After that download [RealESRGAN_x4plus.pth](https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth) and [RealESRGAN_x4plus_anime_6B.pth](https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth).
-Put them into the `/sd/RealESRGAN/experiments/pretrained_models` directory. If you're getting troubles with RealESRGAN support, follow instructions from the RealESRGAN's repository until `inference_realesrgan.py` script works.
-
-If the RealESRGAN directory does not exist, you will not get the option to use RealESRGAN in the UI. If it does exist, you will be either able
-to use it, or there will be a message in console with an error related to RealESRGAN.
+Download [RealESRGAN_x4plus.pth](https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth) and [RealESRGAN_x4plus_anime_6B.pth](https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth).
+Put them into the `stable-diffusion/src/realesrgan/experiments/pretrained_models` directory. 
 
 ### Web UI
 
@@ -72,7 +76,8 @@ There is also a separate tab for using RealESRGAN on any picture.
 ![](images/RealESRGAN.png)
 
 ### Sampling method selection
-Pick out of three sampling methods for txt2img: DDIM, PLMS, k-diffusion:
+txt2img samplers: "DDIM", "PLMS", 'k_dpm_2_a', 'k_dpm_2', 'k_euler_a', 'k_euler', 'k_heun', 'k_lms'
+img2img samplers: "DDIM", 'k_dpm_2_a', 'k_dpm_2', 'k_euler_a', 'k_euler', 'k_heun', 'k_lms'
 
 ![](images/sampling.png)
 
@@ -95,7 +100,7 @@ If you use this feature, batch count will be ignored, because the number of pict
 depends on your prompts, but batch size will still work (generating multiple pictures at the
 same time for a small speed boost).
 
-### Flagging
+### Flagging (Broken after UI changed to gradio.Blocks() see [Flag button missing from new UI](https://github.com/hlky/stable-diffusion-webui/issues/50))
 Click the Flag button under the output section, and generated images will be saved to `log/images` directory, and generation parameters
 will be appended to a csv file `log/log.csv` in the `/sd` directory.
 
