@@ -786,7 +786,7 @@ skip_grid, sort_samples, sampler_name, ddim_eta, n_iter, batch_size, i, denoisin
 
     info = f"""
 {prompt}
-Steps: {steps}, Sampler: {sampler_name}, CFG scale: {cfg_scale}, {f'Denoising Strength:{denoising_strength}' if init_img is not None else ''}Size: {width} x {height}, Batch Seed: {all_seeds}{', GFPGAN: Enabled' if use_GFPGAN else ', GFPGAN: Disabled'}{', RealESRGAN: '+realesrgan_model_name if use_RealESRGAN else 'RealESRGAN: Disabled'}{', Prompt Matrix Mode.' if prompt_matrix else ''}""".strip()
+Steps: {steps}, Sampler: {sampler_name}, CFG scale: {cfg_scale}, {f'Denoising Strength:{denoising_strength}' if init_img is not None else ''}Size: {width} x {height}, Batch Seed: {all_seeds}{', GFPGAN: Enabled' if use_GFPGAN else ', GFPGAN: Disabled'}{', RealESRGAN: '+realesrgan_model_name if use_RealESRGAN else ', RealESRGAN: Disabled'}{', Prompt Matrix Mode.' if prompt_matrix else ''}""".strip()
     stats = f'''
 Took { round(time_diff, 2) }s total ({ round(time_diff/(len(all_prompts)),2) }s per image)
 Peak memory usage: { -(mem_max_used // -1_048_576) } MiB / { -(mem_total // -1_048_576) } MiB / { round(mem_max_used/mem_total*100, 3) }%'''
@@ -823,8 +823,7 @@ def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int],
     use_GFPGAN = 7 in toggles
     use_RealESRGAN = 8 in toggles
 
-    replace_old = 9 in toggles
-    steb_by_step = 10 in toggles
+
     used_cfg = cfg_scale if cfg_choice == 0 else pcfg_scale
     if sampler_name == 'PLMS':
         sampler = PLMSSampler(model)
@@ -851,10 +850,10 @@ def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int],
     global new_info
     global old_params
     global new_params
-    if replace_old:
-        old_images = new_images
-        old_info = new_info
-        old_params = new_params
+    #if replace_old:
+    #    old_images = new_images
+    #    old_info = new_info
+    #    old_params = new_params
     new_images = []
     new_info = []
 
@@ -897,7 +896,7 @@ def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int],
         new_images = output_images
         new_info = info
         new_params = (prompt, ddim_steps, sampler_name, toggles, realesrgan_model_name, ddim_eta, n_iter, batch_size, cfg_choice, cfg_scale, pcfg_scale, height, width, fp, seed )
-        return old_images,old_info, output_images, seed, info, stats
+        return output_images, seed, info, stats
     except RuntimeError as e:
         err = e
         err_msg = f'CRASHED:<br><textarea rows="5" style="color:white;background: black;width: -webkit-fill-available;font-family: monospace;font-size: small;font-weight: bold;">{str(e)}</textarea><br><br>Please wait while the program restarts.'
@@ -907,8 +906,17 @@ def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int],
         if err:
             crash(err, '!!Runtime error (txt2img)!!')
 
-
-
+def SaveToHistory():
+    global old_images
+    global new_images
+    global old_info
+    global new_info
+    global old_params
+    global new_params
+    old_images = new_images
+    old_info = new_info
+    old_params = new_params
+    return old_images, old_info
 def SaveToCsv(images, image_index:int, use_history=False):
     import csv
     if len(images) == 0:
@@ -1329,7 +1337,7 @@ txt2img_toggles = [
 ]
 txt2img_toggles.append('Fix faces using GFPGAN')
 txt2img_toggles.append('Upscale images using RealESRGAN')
-txt2img_toggles.append('Replace Old Image with newly generated Image (GUI ONLY)')
+#txt2img_toggles.append('Replace Old Image with newly generated Image (GUI ONLY)')
 
 
 
@@ -1443,11 +1451,15 @@ help_text = """
     If it keeps not working, try switching modes again, switch tabs, clear the image or reload.
 """
 
+
 def show_help():
     return [gr.update(visible=False), gr.update(visible=True), gr.update(value=help_text)]
 
 def hide_help():
     return [gr.update(visible=True), gr.update(visible=False), gr.update(value="")]
+
+def switch_history_vis(value:bool):
+    return gr.update(visible=value)
 
 with gr.Blocks(css=css, analytics_enabled=False, title="Stable Diffusion WebUI") as demo:
     with gr.Tabs():
@@ -1472,24 +1484,39 @@ with gr.Blocks(css=css, analytics_enabled=False, title="Stable Diffusion WebUI")
                     txt2img_embeddings = gr.File(label = "Embeddings file for textual inversion", visible=hasattr(model, "embedding_manager"))
                     txt2img_btn = gr.Button("Generate")
                 with gr.Column():
-                    output_txt2img_oldImg = gr.Gallery(label="Old Images")
-                    output_txt2img_oldParam = gr.Textbox(label="generation parameters History")
-                    output_txt2img_select_imageold = gr.Number(label='Select image number from results for copy/Save',type="index", value=1, precision=None)
-                    output_txt2img_copy_to_input_btnold = gr.Button("Copy selected image to img2img input")
-                    output_txt2img_save_to_csv_btnold = gr.Button("Save the Selected Image parameters that are currently in the history")
 
-                    output_txt2img_NewImg =  gr.Gallery(label="New Images")
-                    output_txt2img_seed = gr.Number(label='Seed')
-                    output_txt2img_params = gr.Textbox(label="Copy-paste generation parameters")
-                    output_txt2img_select_imagenew = gr.Number(label='Select image number from results for Copy/Save',type="index", value=1, precision=None)
-                    output_txt2img_copy_to_input_btnnew = gr.Button("Copy selected image to img2img input")
-                    output_txt2img_save_to_csv_btnnew = gr.Button("Save the Selected Image parameters")
-                    output_txt2img_stats = gr.HTML(label='Stats')
+                    output_txt2img_history = gr.Box(label="History")
 
+                    with output_txt2img_history:
+                        gr.Markdown("Image History")
+                        output_txt2img_showHostory = gr.Checkbox(label="Open", value=True)
+                        output_txt2img_history_intern = gr.Box()
+                        with output_txt2img_history_intern:
+                            output_txt2img_oldImg = gr.Gallery(label="Old Images")
+                            output_txt2img_oldParam = gr.Textbox(label="generation parameters History")
+                            output_txt2img_select_imageold = gr.Number(label='Select image number from results for copy/Save', value=1, precision=None)
+                            output_txt2img_copy_to_input_btnold = gr.Button("Copy selected image to img2img input")
+                            output_txt2img_save_to_csv_btnold = gr.Button("Save the Selected Image parameters that are currently in the history")
+                    with gr.Box():
+                        output_txt2img_NewImg =  gr.Gallery(label="New Images")
+                        output_txt2img_seed = gr.Number(label='Seed')
+                        output_txt2img_params = gr.Textbox(label="Copy-paste generation parameters")
+                        output_txt2img_select_imagenew = gr.Number(label='Select image number from results for Copy/Save', value=1, precision=None)
+                        output_txt2img_copy_to_input_btnnew = gr.Button("Copy selected image to img2img input")
+                        output_txt2img_save_to_csv_btnnew = gr.Button("Save the Selected Image parameters")
+                        output_txt2img_save_to_history_btn= gr.Button("Save Images Into History")
+                        output_txt2img_stats = gr.HTML(label='Stats')
+
+
+            output_txt2img_showHostory.change(
+                switch_history_vis,
+                [output_txt2img_showHostory],
+                [output_txt2img_history_intern]
+            )
             txt2img_btn.click(
                 txt2img,
                 [txt2img_prompt, txt2img_steps, txt2img_sampling, txt2img_togglesBox, txt2img_realesrgan_model_name, txt2img_ddim_eta, txt2img_batch_count, txt2img_batch_size, txt2img_cfgPrecision, txt2img_cfg, txt2img_pcfg, txt2img_seed, txt2img_height, txt2img_width, txt2img_embeddings],
-                [output_txt2img_oldImg, output_txt2img_oldParam, output_txt2img_NewImg, output_txt2img_seed, output_txt2img_params, output_txt2img_stats]
+                [output_txt2img_NewImg, output_txt2img_seed, output_txt2img_params, output_txt2img_stats]
             )
 
             output_txt2img_save_to_csv_btnold.click(
@@ -1501,6 +1528,11 @@ with gr.Blocks(css=css, analytics_enabled=False, title="Stable Diffusion WebUI")
                 SaveToCsv,
                 [output_txt2img_NewImg,output_txt2img_select_imagenew],
                 None
+            )
+            output_txt2img_save_to_history_btn.click(
+                SaveToHistory,
+                None,
+                [output_txt2img_oldImg,output_txt2img_oldParam]
             )
 
 
