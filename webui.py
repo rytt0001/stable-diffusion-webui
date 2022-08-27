@@ -307,6 +307,7 @@ if opt.optimized:
     model = instantiate_from_config(config.modelUNet)
     _, _ = model.load_state_dict(sd, strict=False)
     model.eval()
+    model.turbo = True
 
     modelCS = instantiate_from_config(config.modelCondStage)
     _, _ = modelCS.load_state_dict(sd, strict=False)
@@ -618,12 +619,13 @@ def process_images(
 
     precision_scope = autocast if opt.precision == "autocast" else nullcontext
     output_images = []
+    output_seeds = []
     stats = []
     output_name = []
     output_pixels = []
     tic = time.time()
     for n in range(n_iter):
-        with torch.no_grad(), precision_scope("cuda"), model.ema_scope():
+        with torch.no_grad(), precision_scope("cuda"), (model.ema_scope() if not opt.optimized else nullcontext()):
             init_data = func_init()
             prompts = all_prompts[n * batch_size:(n + 1) * batch_size]
             seeds = all_seeds[n * batch_size:(n + 1) * batch_size]
@@ -664,10 +666,8 @@ def process_images(
             # we manually generate all input noises because each one should have a specific seed
             x = create_random_tensors([opt_C, height // opt_f, width // opt_f], seeds=seeds)
             samples_ddim = func_sample(init_data=init_data, x=x, conditioning=c, unconditional_conditioning=uc, sampler_name=sampler_name)
-
             if opt.optimized:
                 modelFS.to(device)
-
             
 
             x_samples_ddim = (model if not opt.optimized else modelFS).decode_first_stage(samples_ddim)
@@ -685,7 +685,6 @@ def process_images(
                     base_count = len([x for x in os.listdir(sample_path_i) if x.endswith(('.png', '.jpg'))]) - 1 # start at 0
                     sanitized_prompt = sanitized_prompt
                     filename = f"{base_count:05}-{seeds[i]}_{sanitized_prompt}"[:128] #same as before
-
                 x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
                 x_sample = x_sample.astype(np.uint8)
                 if use_GFPGAN and init_img is not None:
@@ -698,8 +697,7 @@ def process_images(
                     save_sample(image, sample_path_i, filename, jpg_sample, prompts, seeds, width, height, steps, cfg_scale, 
 normalize_prompt_weights, use_GFPGAN, write_info_files, prompt_matrix, init_img, uses_loopback, uses_random_seed_loopback, skip_save,
 skip_grid, sort_samples, sampler_name, ddim_eta, n_iter, batch_size, i, denoising_strength, resize_mode)
-                    filename = original_filename
-                    x_sample = original_sample
+
 
                 image = Image.fromarray(x_sample)
                 if init_mask:
@@ -736,26 +734,24 @@ skip_grid, sort_samples, sampler_name, ddim_eta, n_iter, batch_size, i, denoisin
 
     toc = time.time()
     if (prompt_matrix or not skip_grid) and not do_not_save_grid:
-            if prompt_matrix:
-                grid = image_grid(output_images, batch_size, force_n_rows=1 << ((len(prompt_matrix_parts)-1)//2))
-            else:
-                grid = image_grid(output_images, batch_size)
-            if prompt_matrix:
-                try:
-                    grid = draw_prompt_matrix(grid, width, height, prompt_matrix_parts)
-                except:
-                    import traceback
-                    print("Error creating prompt_matrix text:", file=sys.stderr)
-                    print(traceback.format_exc(), file=sys.stderr)
-
-                output_images.insert(0, grid)
-            else:
-                grid = image_grid(output_images, batch_size)
-
-            grid_count = get_next_sequence_number(outpath, 'grid-')
-            grid_file = f"grid-{grid_count:05}-{seed}_{prompts[i].replace(' ', '_').translate({ord(x): '' for x in invalid_filename_chars})[:128]}.jpg"
-            grid.save(os.path.join(outpath, grid_file), 'jpeg', quality=100, optimize=True)
-            grid_count += 1
+        if prompt_matrix:
+            grid = image_grid(output_images, batch_size, force_n_rows=1 << ((len(prompt_matrix_parts)-1)//2))
+        else:
+            grid = image_grid(output_images, batch_size)
+        if prompt_matrix:
+            try:
+                grid = draw_prompt_matrix(grid, width, height, prompt_matrix_parts)
+            except:
+                import traceback
+                print("Error creating prompt_matrix text:", file=sys.stderr)
+                print(traceback.format_exc(), file=sys.stderr)
+            output_images.insert(0, grid)
+        else:
+            grid = image_grid(output_images, batch_size)
+        grid_count = get_next_sequence_number(outpath, 'grid-')
+        grid_file = f"grid-{grid_count:05}-{seed}_{prompts[i].replace(' ', '_').translate({ord(x): '' for x in invalid_filename_chars})[:128]}.jpg"
+        grid.save(os.path.join(outpath, grid_file), 'jpeg', quality=100, optimize=True)
+        grid_count += 1
     if init_img is None:
         for n in range(0,len(output_images)):
             if use_GFPGAN:
@@ -790,7 +786,7 @@ skip_grid, sort_samples, sampler_name, ddim_eta, n_iter, batch_size, i, denoisin
 
     info = f"""
 {prompt}
-Steps: {steps}, Sampler: {sampler_name}, CFG scale: {cfg_scale}, Size: {width} x {height}, Batch Seed: {all_seeds}{', GFPGAN: Enabled' if use_GFPGAN else ', GFPGAN: Disabled'}{', RealESRGAN: '+realesrgan_model_name if use_RealESRGAN else 'RealESRGAN: Disabled'}{', Prompt Matrix Mode.' if prompt_matrix else ''}""".strip()
+Steps: {steps}, Sampler: {sampler_name}, CFG scale: {cfg_scale}, {f'Denoising Strength:{denoising_strength}' if init_img is not None else ''}Size: {width} x {height}, Batch Seed: {all_seeds}{', GFPGAN: Enabled' if use_GFPGAN else ', GFPGAN: Disabled'}{', RealESRGAN: '+realesrgan_model_name if use_RealESRGAN else 'RealESRGAN: Disabled'}{', Prompt Matrix Mode.' if prompt_matrix else ''}""".strip()
     stats = f'''
 Took { round(time_diff, 2) }s total ({ round(time_diff/(len(all_prompts)),2) }s per image)
 Peak memory usage: { -(mem_max_used // -1_048_576) } MiB / { -(mem_total // -1_048_576) } MiB / { round(mem_max_used/mem_total*100, 3) }%'''
@@ -809,7 +805,8 @@ old_images = []
 new_images = []
 old_info = f""
 new_info = f""
-
+old_params = []
+new_params = []
 def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int], realesrgan_model_name: str, ddim_eta: float, n_iter: int,
             batch_size: int,cfg_choice: int, cfg_scale: float,pcfg_scale: float, seed: Union[int, str, None], height: int, width: int, fp):
     outpath = opt.outdir_txt2img or opt.outdir or "outputs/txt2img-samples"
@@ -852,11 +849,15 @@ def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int],
     global new_images
     global old_info
     global new_info
+    global old_params
+    global new_params
     if replace_old:
         old_images = new_images
         old_info = new_info
+        old_params = new_params
     new_images = []
     new_info = []
+
     def init():
         pass
 
@@ -895,6 +896,7 @@ def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int],
         del sampler
         new_images = output_images
         new_info = info
+        new_params = (prompt, ddim_steps, sampler_name, toggles, realesrgan_model_name, ddim_eta, n_iter, batch_size, cfg_choice, cfg_scale, pcfg_scale, height, width, fp, seed )
         return old_images,old_info, output_images, seed, info, stats
     except RuntimeError as e:
         err = e
@@ -904,6 +906,56 @@ def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int],
     finally:
         if err:
             crash(err, '!!Runtime error (txt2img)!!')
+
+
+
+def SaveToCsv(images, image_index:int, use_history=False):
+    import csv
+    if len(images) == 0:
+        return
+    global old_params
+    global new_params
+    os.makedirs("log/images", exist_ok=True)
+        # those must match the "txt2img" function !! + images, seed, comment, stats !! NOTE: changes to UI output must be reflected here too
+
+    filenames = []
+    if not image_index-1 < len(images):
+        image_index = len(images)
+    if not image_index-1 >=0:
+        image_index = 0
+
+
+    savedImgs = images[int(image_index-1)]
+    params = new_params if not use_history else old_params
+    prompt, ddim_steps, sampler_name, toggles, realesrgan_model_name, ddim_eta, n_iter, batch_size, cfg_choice, cfg_scale, pcfg_scale, height, width, fp, seed = params
+    seed = seed+(image_index-1)
+    cfg = cfg_scale if cfg_choice == 0 else pcfg_scale
+    with open("log/Resultlog.csv", "a", encoding="utf8", newline='') as file:
+        import time
+        import base64
+
+        at_start = file.tell() == 0
+        writer = csv.writer(file, delimiter =",")
+        if at_start:
+            writer.writerow(["prompt", "seed", "width", "height", "sampler", "toggles", "n_iter", "n_samples", "cfg_scale", "steps", "filename", "RealESRGAN name"])
+
+        filename_base = str(int(time.time() * 1000))
+
+        filename = "log/images/"+filename_base + "-"+str(int(image_index)) + ".png"
+
+        if savedImgs.startswith("data:image/png;base64,"):
+            savedImgs = savedImgs[len("data:image/png;base64,"):]
+
+        with open(filename, "wb") as imgfile:
+            imgfile.write(base64.decodebytes(savedImgs.encode('utf-8')))
+
+        use_RealESRGAN = 8 in toggles
+
+        writer.writerow([prompt, seed, width, height, sampler_name, toggles, n_iter, batch_size, cfg, ddim_steps, filename, realesrgan_model_name if use_RealESRGAN else 'Disabled'])
+
+
+def SaveToCsvHistory(old_img,image_index):
+    SaveToCsv(old_img,image_index, True)
 
 
 class Flagging(gr.FlaggingCallback):
@@ -1421,14 +1473,17 @@ with gr.Blocks(css=css, analytics_enabled=False, title="Stable Diffusion WebUI")
                     txt2img_btn = gr.Button("Generate")
                 with gr.Column():
                     output_txt2img_oldImg = gr.Gallery(label="Old Images")
-                    output_txt2img_select_imageold = gr.Number(label='Select image number from results for copying', value=1, precision=None)
-                    output_txt2img_copy_to_input_btnold = gr.Button("Copy selected image to img2img input")
                     output_txt2img_oldParam = gr.Textbox(label="generation parameters History")
+                    output_txt2img_select_imageold = gr.Number(label='Select image number from results for copy/Save',type="index", value=1, precision=None)
+                    output_txt2img_copy_to_input_btnold = gr.Button("Copy selected image to img2img input")
+                    output_txt2img_save_to_csv_btnold = gr.Button("Save the Selected Image parameters that are currently in the history")
+
                     output_txt2img_NewImg =  gr.Gallery(label="New Images")
-                    output_txt2img_select_imagenew = gr.Number(label='Select image number from results for copying', value=1, precision=None)
-                    output_txt2img_copy_to_input_btnnew = gr.Button("Copy selected image to img2img input")
                     output_txt2img_seed = gr.Number(label='Seed')
                     output_txt2img_params = gr.Textbox(label="Copy-paste generation parameters")
+                    output_txt2img_select_imagenew = gr.Number(label='Select image number from results for Copy/Save',type="index", value=1, precision=None)
+                    output_txt2img_copy_to_input_btnnew = gr.Button("Copy selected image to img2img input")
+                    output_txt2img_save_to_csv_btnnew = gr.Button("Save the Selected Image parameters")
                     output_txt2img_stats = gr.HTML(label='Stats')
 
             txt2img_btn.click(
@@ -1436,6 +1491,18 @@ with gr.Blocks(css=css, analytics_enabled=False, title="Stable Diffusion WebUI")
                 [txt2img_prompt, txt2img_steps, txt2img_sampling, txt2img_togglesBox, txt2img_realesrgan_model_name, txt2img_ddim_eta, txt2img_batch_count, txt2img_batch_size, txt2img_cfgPrecision, txt2img_cfg, txt2img_pcfg, txt2img_seed, txt2img_height, txt2img_width, txt2img_embeddings],
                 [output_txt2img_oldImg, output_txt2img_oldParam, output_txt2img_NewImg, output_txt2img_seed, output_txt2img_params, output_txt2img_stats]
             )
+
+            output_txt2img_save_to_csv_btnold.click(
+                SaveToCsvHistory,
+                [output_txt2img_oldImg, output_txt2img_select_imageold],
+                None
+            )
+            output_txt2img_save_to_csv_btnnew.click(
+                SaveToCsv,
+                [output_txt2img_NewImg,output_txt2img_select_imagenew],
+                None
+            )
+
 
         with gr.TabItem("Stable Diffusion Image-to-Image Unified"):
             with gr.Row().style(equal_height=False):
@@ -1507,12 +1574,16 @@ with gr.Blocks(css=css, analytics_enabled=False, title="Stable Diffusion WebUI")
                 [img2img_image_editor, img2img_image_mask]
             )
 
-            output_txt2img_copy_to_input_btn.click(
+            output_txt2img_copy_to_input_btnold.click(
                 copy_img_to_input,
-                [output_txt2img_select_image, output_txt2img_gallery],
+                [output_txt2img_select_imageold, output_txt2img_oldImg],
                 [img2img_image_editor, img2img_image_mask]
             )
-
+            output_txt2img_copy_to_input_btnnew.click(
+                copy_img_to_input,
+                [output_txt2img_select_imagenew, output_txt2img_NewImg],
+                [img2img_image_editor, img2img_image_mask]
+            )
             img2img_btn_mask.click(
                 img2img,
                 [img2img_prompt, img2img_image_editor_mode, img2img_image_mask, img2img_mask, img2img_mask_blur_strength, img2img_steps, img2img_sampling, img2img_togglesBox, img2img_realesrgan_model_name, img2img_batch_count, img2img_batch_size, img2img_cfg, img2img_denoising, img2img_seed, img2img_height, img2img_width, img2img_resize, img2img_embeddings],
@@ -1551,8 +1622,8 @@ with gr.Blocks(css=css, analytics_enabled=False, title="Stable Diffusion WebUI")
             }""")
 
       
-           	gfpgan_defaults = {
-           		'strength': 100,
+            gfpgan_defaults = {
+                'strength': 100,
             }     
 
         if 'gfpgan' in user_defaults:
