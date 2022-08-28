@@ -1295,11 +1295,12 @@ def SaveToCsv(images, image_index:int, use_history=False):
 
         use_RealESRGAN = 8 in toggles
 
-        writer.writerow([prompt, seed, width, height, sampler_name, toggles, n_iter, batch_size, cfg, ddim_steps, filename, realesrgan_model_name if use_RealESRGAN else 'Disabled'])
+        writer.writerow([prompt if prompt else " ", seed, width, height, sampler_name, toggles, n_iter, batch_size, cfg, ddim_steps, filename, realesrgan_model_name if use_RealESRGAN else 'Disabled'])
+    return gr.update(value ="log/Resultlog.csv")
 
 
 def SaveToCsvHistory(old_img,image_index):
-    SaveToCsv(old_img,image_index, True)
+    return SaveToCsv(old_img,image_index, True)
 
 
 class Flagging(gr.FlaggingCallback):
@@ -1631,6 +1632,14 @@ def run_GFPGAN(image, strength, autoload = True):
 
 def run_RealESRGAN(image, model_type: str, model_name: str, autoload= True, Itype='RGB', scale_ratio=4, do_array=False):
     Internal = model_type == 'Internal'
+    index= upscalers_type.index(model_type)
+    arg = upscalers_args[index]
+    scale_list = upscaler_scale[index]
+    try:
+
+        scale_id = scale_list.index(scale_ratio)
+    except ValueError:
+        scale_ratio = scale_list[len(scale_list)-1]
     #if opt.extern_upscaler and not Internal:
     if not Internal:
         torch_gc()
@@ -1641,7 +1650,7 @@ def run_RealESRGAN(image, model_type: str, model_name: str, autoload= True, Ityp
         try:
             print(f'NAME={model_name}')
             subprocess.run(
-                ['./'+model_type, '-i', './TMP/original.png', '-o', './TMP/output.png', '-n', str(model_name), '-s', str(int(scale_ratio))],
+                ['./'+model_type, '-i', './TMP/original.png', '-o', './TMP/output.png', str(arg), str(model_name), '-s', str(int(scale_ratio))],
                 stdout=subprocess.PIPE
             ).stdout.decode('utf-8')
             output = Image.open('./TMP/output.png').convert(Itype)
@@ -2010,12 +2019,20 @@ img2img_defaults = {
 
 
 upscalers_type = ['Internal']
+upscalers_args = ['']
+upscaler_scale = [[4]]
 if os.path.exists('./realesrgan-ncnn-vulkan') or os.path.exists('./realesrgan-ncnn-vulkan.exe'):
     upscalers_type.append('realesrgan-ncnn-vulkan')
+    upscalers_args.append('-n')
+    upscaler_scale.append([4])
 if os.path.exists('./realesrgan-ncnn-vulkan') or os.path.exists('./realesrgan-ncnn-vulkan.exe'):
     upscalers_type.append('waifu2x-ncnn-vulkan')
+    upscalers_args.append('-m')
+    upscaler_scale.append([1,2,4])
 if os.path.exists('./realesrgan-ncnn-vulkan') or os.path.exists('./realesrgan-ncnn-vulkan.exe'):
     upscalers_type.append('realsr-ncnn-vulkan')
+    upscalers_args.append('-m')
+    upscaler_scale.append([4])
 ext_esrgan_models = ['realesrgan-x4plus', 'realesrgan-x4plus-anime']
 ext_srgan_models = ['models-DF2K','models-DF2K_JPEG']
 ext_waifu_models = ['models-cunet','models-upconv_7_photo','models-upconv_7_anime_style_art_rgb']
@@ -2099,6 +2116,14 @@ styling = """
 #prompt_row input{
  font-size:20px
 }
+#CSV_DRAW{
+width: 100%;
+max-height: 800px;
+overflow: scroll;
+flex: unset;
+display: flex;
+
+}
 input[type=number]:disabled { -moz-appearance: textfield;+ }
 """
 
@@ -2146,7 +2171,7 @@ with gr.Blocks(css=css, analytics_enabled=False, title="Stable Diffusion WebUI")
                                 with gr.Group():
                                     output_txt2img_select_imageold = gr.Number(label='Select image number from results for copy/Save', value=1, precision=None)
                                     output_txt2img_copy_to_input_btnold = gr.Button("Copy selected image to img2img input")
-                                    output_txt2img_save_to_csv_btnold = gr.Button("Save the Selected Image parameters that are currently in the history")
+                                    output_txt2img_save_to_csv_btnold = gr.Button("Save the Selected Image parameters that are currently in the history").style(rounded=[False, True, True, True])
 
                             with gr.Row():
                                 output_txt2img_oldParam = gr.Textbox(label="generation parameters History")
@@ -2163,13 +2188,13 @@ with gr.Blocks(css=css, analytics_enabled=False, title="Stable Diffusion WebUI")
                             with gr.Group():
                                 output_txt2img_select_imagenew = gr.Number(label='Select image number from results for Copy/Save', value=1, precision=None)
                                 output_txt2img_copy_to_input_btnnew = gr.Button("Push to img2img").style(full_width=True)
-                                output_txt2img_save_to_csv_btnnew = gr.Button("Save the Selected Image parameters")
-                                output_txt2img_copy_to_gobig_input_btn = gr.Button("Copy selected image to goBig input")
+                                output_txt2img_save_to_csv_btnnew = gr.Button("Save the Selected Image parameters").style(rounded=[False,False,False,True])
+                                output_txt2img_copy_to_gobig_input_btn = gr.Button("Copy selected image to goBig input").style(rounded=[False,False,True,False])
 
                         with gr.Group():
                             output_txt2img_params = gr.Textbox(label="Copy-paste generation parameters", interactive=False)
-                            output_txt2img_save_to_history_btn= gr.Button("Save Images Into History")
-                            output_txt2img_copy_params = gr.Button("Copy").click(inputs=output_txt2img_params, outputs=[], _js='(x) => navigator.clipboard.writeText(x)', fn=None, show_progress=False)
+                            output_txt2img_save_to_history_btn= gr.Button("Save Images Into History").style(rounded=[False,False,False,True])
+                            output_txt2img_copy_params = gr.Button("Copy").style(rounded=[False,False,True,False]).click(inputs=output_txt2img_params, outputs=[], _js='(x) => navigator.clipboard.writeText(x)', fn=None, show_progress=False)
                     output_txt2img_stats = gr.HTML(label='Stats')
 
 
@@ -2216,16 +2241,7 @@ with gr.Blocks(css=css, analytics_enabled=False, title="Stable Diffusion WebUI")
                 [output_txt2img_NewImg, output_txt2img_seed, output_txt2img_params, output_txt2img_stats]
             )
 
-            output_txt2img_save_to_csv_btnold.click(
-                SaveToCsvHistory,
-                [output_txt2img_oldImg, output_txt2img_select_imageold],
-                None
-            )
-            output_txt2img_save_to_csv_btnnew.click(
-                SaveToCsv,
-                [output_txt2img_NewImg,output_txt2img_select_imagenew],
-                None
-            )
+
             output_txt2img_save_to_history_btn.click(
                 SaveToHistory,
                 None,
@@ -2451,7 +2467,23 @@ with gr.Blocks(css=css, analytics_enabled=False, title="Stable Diffusion WebUI")
                 [output_txt2img_select_imagenew, output_txt2img_NewImg],
                 [realesrganGoBig_source,realesrganGoBig_source]
             )
+        with gr.TabItem("Parameter History"):
+            def refresh():
+                return gr.update(value ="log/Resultlog.csv")
+            with gr.Column():
+                csv_file = gr.Dataframe(value="log/Resultlog.csv", elem_id="CSV_DRAW").style(rounded=[True, True,False,False])
+                csv_btn = gr.Button("Refresh", elem_id="generate").style(rounded=[False, False,True,True],full_width=True).click(refresh, None, [csv_file])
 
+            output_txt2img_save_to_csv_btnold.click(
+                SaveToCsvHistory,
+                [output_txt2img_oldImg, output_txt2img_select_imageold],
+                [csv_file]
+            )
+            output_txt2img_save_to_csv_btnnew.click(
+                SaveToCsv,
+                [output_txt2img_NewImg,output_txt2img_select_imagenew],
+                [csv_file]
+            )
 
 
 
