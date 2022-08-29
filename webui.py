@@ -672,13 +672,18 @@ def process_images(
 
     sample_path = os.path.join(outpath, "samples")
     os.makedirs(sample_path, exist_ok=True)
-    
+    autoMatrix =prompt.startswith("@@")
+    if not ("|" in prompt) and autoMatrix:
+        prompt = prompt[2:]
     if not ("|" in prompt) and prompt.startswith("@"):
         prompt = prompt[1:]
     comments = []
 
     prompt_matrix_parts = []
-    if prompt_matrix or prompt.startswith("@"):
+    prompt_matrix = prompt_matrix or autoMatrix
+    if prompt_matrix:
+        if autoMatrix :
+            prompt = prompt[1:]
         if prompt.startswith("@"):
             all_seeds, n_iter, prompt_matrix_parts, all_prompts, frows = oxlamon_matrix(prompt, seed, n_iter, batch_size)
         else:
@@ -716,12 +721,14 @@ def process_images(
     output_seeds = []
     stats = []
     output_name = []
+    output_prompt = []
     output_pixels = []
     tic = time.time()
     for n in range(n_iter):
         with torch.no_grad(), precision_scope("cuda"), (model.ema_scope() if not opt.optimized else nullcontext()):
             init_data = func_init()
             prompts = all_prompts[n * batch_size:(n + 1) * batch_size]
+
             seeds = all_seeds[n * batch_size:(n + 1) * batch_size]
 
             if opt.optimized:
@@ -1034,11 +1041,12 @@ skip_grid, sort_samples, sampler_name, ddim_eta, n_iter, batch_size, i, denoisin
                     image = Image.fromarray(x_sample)
 
 
-                filename = f"{base_count:05}-{seeds[i]}_{prompts[i].replace(' ', '_').translate({ord(x): '' for x in invalid_filename_chars})[:128]}.png"
+                filename = f"{base_count:05}-{len(output_images)}-{seeds[i]}_{prompts[i].replace(' ', '_').translate({ord(x): '' for x in invalid_filename_chars})[:128]}.png"
                 if not skip_save and init_img is not None:
                     image.save(os.path.join(sample_path, filename))
 
                 output_name.append(filename)
+                output_prompt.append(prompts[i].translate({ord(x): '' for x in invalid_filename_chars})[:128])
                 output_images.append(image)
                 torch_gc()
 
@@ -1048,9 +1056,9 @@ skip_grid, sort_samples, sampler_name, ddim_eta, n_iter, batch_size, i, denoisin
 
     toc = time.time()
 
-
-    if (prompt_matrix or not skip_grid) and not do_not_save_grid:
-        if prompt_matrix:
+    begin_index = 0
+    if (prompt_matrix or not skip_grid or autoMatrix) and not do_not_save_grid:
+        if prompt_matrix or autoMatrix:
             if prompt.startswith("@"):
                 grid = image_grid(output_images, batch_size, force_n_rows=frows, captions=prompt_matrix_parts)
             else:
@@ -1066,6 +1074,8 @@ skip_grid, sort_samples, sampler_name, ddim_eta, n_iter, batch_size, i, denoisin
  
         if grid and (batch_size > 1  or n_iter > 1):
             output_images.insert(0, grid)
+            output_prompt.insert(0, prompt)
+            begin_index = 1
 
         grid_count = get_next_sequence_number(outpath, 'grid-')
         grid_file = f"grid-{grid_count:05}-{seed}_{prompts[i].replace(' ', '_').translate({ord(x): '' for x in invalid_filename_chars})[:128]}.{grid_ext}"
@@ -1073,6 +1083,10 @@ skip_grid, sort_samples, sampler_name, ddim_eta, n_iter, batch_size, i, denoisin
 
 
         grid_count += 1
+    global is_txt2img
+    if is_txt2img:
+        global txt2img_prompt
+        txt2img_prompt = output_prompt
     if opt.optimized:
         mem = torch.cuda.memory_allocated()/1e6
         modelFS.to("cpu")
@@ -1083,7 +1097,7 @@ skip_grid, sort_samples, sampler_name, ddim_eta, n_iter, batch_size, i, denoisin
         print(len(output_name))
 
 
-        for n in range(0,len(output_images)):
+        for n in range(begin_index,len(output_images)):
             if use_GFPGAN:
                 if GFPGAN is None:
                     DynamicLoad_GFPGAN()
@@ -1100,7 +1114,7 @@ skip_grid, sort_samples, sampler_name, ddim_eta, n_iter, batch_size, i, denoisin
                 image = output_images[n]
                 output_images[n] = run_RealESRGAN(image,upmodel_type, realesrgan_model_name, False, 'RGB', esrgan_scale)
             if not skip_save:
-                output_images[n].save(os.path.join(sample_path, output_name[n]))
+                output_images[n].save(os.path.join(sample_path, output_name[n-begin_index]))
 
         if RealESRGAN is not None:
             DynamicUnload_RealESRGAN()
@@ -1120,7 +1134,7 @@ skip_grid, sort_samples, sampler_name, ddim_eta, n_iter, batch_size, i, denoisin
 
     info = f"""
 {prompt}
-Steps: {steps}, Sampler: {sampler_name}, CFG scale: {cfg_scale}, {f'Denoising Strength:{denoising_strength}' if init_img is not None else ''}Size: {width} x {height}, Batch Seed: {all_seeds}{', Denoising strength: '+str(denoising_strength) if init_img is not None else ''}{', GFPGAN: Enabled' if use_GFPGAN else ', GFPGAN: Disabled'}{f', Upscaler:{upmodel_type}'if use_RealESRGAN else 'None'}{f', Model:{realesrgan_model_name}' if use_RealESRGAN else ''}{', Prompt Matrix Mode.' if prompt_matrix else ''}""".strip()
+Steps: {steps}, Sampler: {sampler_name}, CFG scale: {cfg_scale}, {f'Denoising Strength:{denoising_strength}' if init_img is not None else ''}Size: {width} x {height}, Batch Seed: {all_seeds}{', Denoising strength: '+str(denoising_strength) if init_img is not None else ''}{', GFPGAN: Enabled' if use_GFPGAN else ', GFPGAN: Disabled'}{f', Upscaler:{upmodel_type}'if use_RealESRGAN else ', Upscaler: None'}{f', Model:{realesrgan_model_name}' if use_RealESRGAN else ''}{', Prompt Matrix Mode.' if prompt_matrix else ''}""".strip()
     stats = f'''
 Took { round(time_diff, 2) }s total ({ round(time_diff/(len(all_prompts)),2) }s per image)
 Peak memory usage: { -(mem_max_used // -1_048_576) } MiB / { -(mem_total // -1_048_576) } MiB / { round(mem_max_used/mem_total*100, 3) }%'''
@@ -1132,7 +1146,7 @@ Peak memory usage: { -(mem_max_used // -1_048_576) } MiB / { -(mem_total // -1_0
     #del mem_mon
     torch_gc()
 
-    return output_images, seed, info, stats
+    return output_images, seed, info, stats, prompt_matrix
 
 
 old_images = []
@@ -1141,6 +1155,10 @@ old_info = f""
 new_info = f""
 old_params = []
 new_params = []
+old_isMatrix = False
+new_isMatrix = False
+is_txt2img =False
+txt2img_prompt=[]
 def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int], upmodel_type, realesrgan_model_name: str,esrgan_scale:int, ddim_eta: float, n_iter: int,
             batch_size: int,cfg_choice: int, cfg_scale: float,pcfg_scale: float,gstrength: float,gsteps: float, seed: Union[int, str, None], height: int, width: int, fp):
     outpath = opt.outdir_txt2img or opt.outdir or "outputs/txt2img-samples"
@@ -1185,14 +1203,14 @@ def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int],
     global new_info
     global old_params
     global new_params
-    #if replace_old:
-    #    old_images = new_images
-    #    old_info = new_info
-    #    old_params = new_params
+    global new_isMatrix
+
     new_images = []
     new_info = []
 
     def init():
+        global is_txt2img
+        is_txt2img = True
         pass
 
     def sample(init_data, x, conditioning, unconditional_conditioning, sampler_name):
@@ -1200,7 +1218,7 @@ def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int],
         return samples_ddim
 
     try:
-        output_images, seed, info, stats = process_images(
+        output_images, seed, info, stats, new_isMatrix = process_images(
             outpath=outpath,
             func_init=init,
             func_sample=sample,
@@ -1235,7 +1253,11 @@ def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int],
         del sampler
         new_images = output_images
         new_info = info
+
         new_params = (prompt, ddim_steps, sampler_name, toggles, realesrgan_model_name, ddim_eta, n_iter, batch_size, cfg_choice, cfg_scale, pcfg_scale, height, width, fp, seed )
+        if new_isMatrix:
+            global txt2img_prompt
+            new_params = (txt2img_prompt,) + (new_params[1:])
         return output_images, seed, info, stats
     except RuntimeError as e:
         err = e
@@ -1253,9 +1275,12 @@ def SaveToHistory():
     global new_info
     global old_params
     global new_params
+    global old_isMatrix
+    global new_isMatrix
     old_images = new_images
     old_info = new_info
     old_params = new_params
+    old_isMatrix = new_isMatrix
     return old_images, old_info
 
 
@@ -1273,6 +1298,8 @@ def SaveToCsv(image_id_array, use_history=False):
         return
     global old_params
     global new_params
+    global old_isMatrix
+    global new_isMatrix
     os.makedirs("log/images", exist_ok=True)
         # those must match the "txt2img" function !! + images, seed, comment, stats !! NOTE: changes to UI output must be reflected here too
 
@@ -1280,11 +1307,13 @@ def SaveToCsv(image_id_array, use_history=False):
 
 
 
-
+    isMatrix = new_isMatrix if not use_history else old_isMatrix
     savedImgs = processed_image
     params = new_params if not use_history else old_params
     prompt, ddim_steps, sampler_name, toggles, realesrgan_model_name, ddim_eta, n_iter, batch_size, cfg_choice, cfg_scale, pcfg_scale, height, width, fp, seed = params
-    seed = seed+(index)
+    if isMatrix:
+        prompt = prompt[index]
+    seed = seed+(index) if not isMatrix else seed
     cfg = cfg_scale if cfg_choice == 0 else pcfg_scale
     with open("log/Resultlog.csv", "a", encoding="utf8", newline='') as file:
 
@@ -1423,7 +1452,7 @@ def img2img(prompt: str, image_editor_mode: str, init_info, mask_mode: str, mask
             initial_seed = None
 
             for i in range(n_iter):
-                output_images, seed, info, stats = process_images(
+                output_images, seed, info, stats, _ = process_images(
                     outpath=outpath,
                     func_init=init,
                     func_sample=sample,
@@ -1485,7 +1514,7 @@ def img2img(prompt: str, image_editor_mode: str, init_info, mask_mode: str, mask
             seed = initial_seed
 
         else:
-            output_images, seed, info, stats = process_images(
+            output_images, seed, info, stats, _ = process_images(
                 outpath=outpath,
                 func_init=init,
                 func_sample=sample,
