@@ -33,6 +33,7 @@ parser.add_argument("--scale",type=float,default=10,help="unconditional guidance
 opt = parser.parse_args()
 
 # this should force GFPGAN and RealESRGAN onto the selected gpu as well
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
 os.environ["CUDA_VISIBLE_DEVICES"] = str(opt.gpu)
 
 import gradio as gr
@@ -309,7 +310,7 @@ def DynamicUnload_RealESRGAN():
 #try_loading_RealESRGAN('RealESRGAN_x4plus')
 
 if opt.optimized:
-    sd = load_sd_from_config("models/ldm/stable-diffusion-v1/model.ckpt")
+    sd = load_sd_from_config(opt.ckpt)
     li, lo = [], []
     for key, v_ in sd.items():
         sp = key.split('.')
@@ -332,19 +333,23 @@ if opt.optimized:
 
     model = instantiate_from_config(config.modelUNet)
     _, _ = model.load_state_dict(sd, strict=False)
+    model.cuda()
     model.eval()
-    model.turbo = True
+    model.turbo = opt.optimized_turbo
 
     modelCS = instantiate_from_config(config.modelCondStage)
     _, _ = modelCS.load_state_dict(sd, strict=False)
+    modelCS.cond_stage_model.device = device
     modelCS.eval()
 
     modelFS = instantiate_from_config(config.modelFirstStage)
     _, _ = modelFS.load_state_dict(sd, strict=False)
     modelFS.eval()
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    model = model if opt.no_half else model.half()
-    modelCS = modelCS if opt.no_half else modelCS.half()
+    if not opt.no_half:
+        model = model.half()
+        modelCS = modelCS.half()
+        modelFS = modelFS.half()
 else:
     config = OmegaConf.load("configs/stable-diffusion/v1-inference.yaml")
     model = load_model_from_config(config, "models/ldm/stable-diffusion-v1/model.ckpt")
@@ -471,40 +476,6 @@ def draw_prompt_matrix(im, width, height, all_prompts):
     return result
 
 
-def resize_image(resize_mode, im, width, height):
-    if resize_mode == 0:
-        res = im.resize((width, height), resample=LANCZOS)
-    elif resize_mode == 1:
-        ratio = width / height
-        src_ratio = im.width / im.height
-
-        src_w = width if ratio > src_ratio else im.width * height // im.height
-        src_h = height if ratio <= src_ratio else im.height * width // im.width
-
-        resized = im.resize((src_w, src_h), resample=LANCZOS)
-        res = Image.new("RGB", (width, height))
-        res.paste(resized, box=(width // 2 - src_w // 2, height // 2 - src_h // 2))
-    else:
-        ratio = width / height
-        src_ratio = im.width / im.height
-
-        src_w = width if ratio < src_ratio else im.width * height // im.height
-        src_h = height if ratio >= src_ratio else im.height * width // im.width
-
-        resized = im.resize((src_w, src_h), resample=LANCZOS)
-        res = Image.new("RGB", (width, height))
-        res.paste(resized, box=(width // 2 - src_w // 2, height // 2 - src_h // 2))
-
-        if ratio < src_ratio:
-            fill_height = height // 2 - src_h // 2
-            res.paste(resized.resize((width, fill_height), box=(0, 0, width, 0)), box=(0, 0))
-            res.paste(resized.resize((width, fill_height), box=(0, resized.height, width, resized.height)), box=(0, fill_height + src_h))
-        elif ratio > src_ratio:
-            fill_width = width // 2 - src_w // 2
-            res.paste(resized.resize((fill_width, height), box=(0, 0, 0, height)), box=(0, 0))
-            res.paste(resized.resize((fill_width, height), box=(resized.width, 0, resized.width, height)), box=(fill_width + src_w, 0))
-
-    return res
 
 
 def check_prompt_length(prompt, comments):
@@ -605,7 +576,7 @@ def get_next_sequence_number(path, prefix=''):
                 pass
     return result + 1
 
-def oxlamon_matrix(prompt, seed, batch_size):
+def oxlamon_matrix(prompt, seed, n_iter, batch_size):
     pattern = re.compile(r'(,\s){2,}')
 
     class PromptItem:
@@ -617,6 +588,13 @@ def oxlamon_matrix(prompt, seed, batch_size):
 
     def clean(txt):
         return re.sub(pattern, ', ', txt)
+
+    def getrowcount( txt ):
+        for data in re.finditer( ".*?\\((.*?)\\).*", txt ):
+            if data:
+                return len(data.group(1).split("|"))
+            break
+        return None
 
     def repliter( txt ):
         for data in re.finditer( ".*?\\((.*?)\\).*", txt ):
@@ -642,19 +620,34 @@ def oxlamon_matrix(prompt, seed, batch_size):
                 return dataitems
             dataitems = newdataitems
 
-    def classToArrays( items ):
+    def classToArrays( items, seed, n_iter ):
         texts = []
         parts = []
+        seeds = []
 
         for item in items:
-            texts.append( item.text )
-            parts.append( "\n".join(item.parts) )
-        return texts, parts
+            itemseed = seed
+            for i in range(n_iter):
+                texts.append( item.text )
+                parts.append( f"Seed: {itemseed}\n" + "\n".join(item.parts) )
+                seeds.append( itemseed )
+                itemseed += 1                
 
-    all_prompts, prompt_matrix_parts = classToArrays(getmatrix( prompt ))
+        return seeds, texts, parts
+
+    all_seeds, all_prompts, prompt_matrix_parts = classToArrays(getmatrix( prompt ), seed, n_iter)
     n_iter = math.ceil(len(all_prompts) / batch_size)
-    all_seeds = len(all_prompts) * [seed]
-    return all_seeds, n_iter, prompt_matrix_parts, all_prompts
+
+    needrows = getrowcount(prompt)
+    if needrows:
+        xrows = math.sqrt(len(all_prompts))
+        xrows = round(xrows)
+        # if columns is to much
+        cols = math.ceil(len(all_prompts) / xrows)
+        if cols > needrows*4:
+            needrows *= 2
+
+    return all_seeds, n_iter, prompt_matrix_parts, all_prompts, needrows
 
 
 def process_images(
@@ -679,13 +672,15 @@ def process_images(
 
     sample_path = os.path.join(outpath, "samples")
     os.makedirs(sample_path, exist_ok=True)
-
+    
+    if not ("|" in prompt) and prompt.startswith("@"):
+        prompt = prompt[1:]
     comments = []
 
     prompt_matrix_parts = []
     if prompt_matrix:
         if prompt.startswith("@"):
-            all_seeds, n_iter, prompt_matrix_parts, all_prompts = oxlamon_matrix(prompt, seed, batch_size)
+            all_seeds, n_iter, prompt_matrix_parts, all_prompts, frows = oxlamon_matrix(prompt, seed, n_iter, batch_size)
         else:
             all_prompts = []
             prompt_matrix_parts = prompt.split("|")
@@ -1056,27 +1051,33 @@ skip_grid, sort_samples, sampler_name, ddim_eta, n_iter, batch_size, i, denoisin
 
     if (prompt_matrix or not skip_grid) and not do_not_save_grid:
         if prompt_matrix:
-            grid = image_grid(output_images, batch_size, force_n_rows=1 << ((len(prompt_matrix_parts)-1)//2), captions=prompt_matrix_parts if prompt.startswith("@") else None)
-        else:
-            grid = image_grid(output_images, batch_size)
-
-        if prompt_matrix:
-            if not prompt.startswith("@"):
+            if prompt.startswith("@"):
+                grid = image_grid(output_images, batch_size, force_n_rows=frows, captions=prompt_matrix_parts)
+            else:
+                grid = image_grid(output_images, batch_size, force_n_rows=1 << ((len(prompt_matrix_parts)-1)//2))
                 try:
                     grid = draw_prompt_matrix(grid, width, height, prompt_matrix_parts)
                 except:
                     import traceback
                     print("Error creating prompt_matrix text:", file=sys.stderr)
                     print(traceback.format_exc(), file=sys.stderr)
-            output_images.insert(0, grid)
         else:
             grid = image_grid(output_images, batch_size)
+ 
+        if grid and (batch_size > 1  or n_iter > 1):
+            output_images.insert(0, grid)
 
         grid_count = get_next_sequence_number(outpath, 'grid-')
         grid_file = f"grid-{grid_count:05}-{seed}_{prompts[i].replace(' ', '_').translate({ord(x): '' for x in invalid_filename_chars})[:128]}.{grid_ext}"
         grid.save(os.path.join(outpath, grid_file), grid_format, quality=grid_quality, lossless=grid_lossless, optimize=True)
 
+
         grid_count += 1
+    if opt.optimized:
+        mem = torch.cuda.memory_allocated()/1e6
+        modelFS.to("cpu")
+        while(torch.cuda.memory_allocated()/1e6 >= mem):
+            time.sleep(1)
     if init_img is None:
         print(len(output_images))
         print(len(output_name))
@@ -1119,7 +1120,7 @@ skip_grid, sort_samples, sampler_name, ddim_eta, n_iter, batch_size, i, denoisin
 
     info = f"""
 {prompt}
-Steps: {steps}, Sampler: {sampler_name}, CFG scale: {cfg_scale}, {f'Denoising Strength:{denoising_strength}' if init_img is not None else ''}Size: {width} x {height}, Batch Seed: {all_seeds}{', GFPGAN: Enabled' if use_GFPGAN else ', GFPGAN: Disabled'}{f', Upscaler:{upmodel_type}'if use_RealESRGAN else 'None'}{f', Model:{realesrgan_model_name}' if use_RealESRGAN else ''}{', Prompt Matrix Mode.' if prompt_matrix else ''}""".strip()
+Steps: {steps}, Sampler: {sampler_name}, CFG scale: {cfg_scale}, {f'Denoising Strength:{denoising_strength}' if init_img is not None else ''}Size: {width} x {height}, Batch Seed: {all_seeds}{', Denoising strength: '+str(denoising_strength) if init_img is not None else ''}{', GFPGAN: Enabled' if use_GFPGAN else ', GFPGAN: Disabled'}{f', Upscaler:{upmodel_type}'if use_RealESRGAN else 'None'}{f', Model:{realesrgan_model_name}' if use_RealESRGAN else ''}{', Prompt Matrix Mode.' if prompt_matrix else ''}""".strip()
     stats = f'''
 Took { round(time_diff, 2) }s total ({ round(time_diff/(len(all_prompts)),2) }s per image)
 Peak memory usage: { -(mem_max_used // -1_048_576) } MiB / { -(mem_total // -1_048_576) } MiB / { round(mem_max_used/mem_total*100, 3) }%'''
@@ -1352,6 +1353,7 @@ def img2img(prompt: str, image_editor_mode: str, init_info, mask_mode: str, mask
     else:
         raise Exception("Unknown sampler: " + sampler_name)
 
+
     if image_editor_mode == 'Mask':
         init_img = init_info["image"]
         init_img = init_img.convert("RGB")
@@ -1383,7 +1385,7 @@ def img2img(prompt: str, image_editor_mode: str, init_info, mask_mode: str, mask
         init_image = init_image.to(device)
         init_image = repeat(init_image, '1 ... -> b ...', b=batch_size)
         init_latent = (model if not opt.optimized else modelFS).get_first_stage_encoding((model if not opt.optimized else modelFS).encode_first_stage(init_image))  # move to latent space
-
+        
         if opt.optimized:
             mem = torch.cuda.memory_allocated()/1e6
             modelFS.to("cpu")
@@ -1402,7 +1404,7 @@ def img2img(prompt: str, image_editor_mode: str, init_info, mask_mode: str, mask
             xi = x0 + noise
             sigma_sched = sigmas[ddim_steps - t_enc - 1:]
             model_wrap_cfg = CFGDenoiser(sampler.model_wrap)
-            samples_ddim, _ = K.sampling.__dict__[f'sample_{sampler.get_sampler_name()}'](model_wrap_cfg, xi, sigma_sched, extra_args={'cond': conditioning, 'uncond': unconditional_conditioning, 'cond_scale': cfg_scale}, disable=False)
+            samples_ddim = K.sampling.__dict__[f'sample_{sampler.get_sampler_name()}'](model_wrap_cfg, xi, sigma_sched, extra_args={'cond': conditioning, 'uncond': unconditional_conditioning, 'cond_scale': cfg_scale}, disable=False)
         else:
             x0, = init_data
             sampler.make_schedule(ddim_num_steps=ddim_steps, ddim_eta=0.0, verbose=False)

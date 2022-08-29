@@ -4,10 +4,14 @@
 
 ### :warning: temporary notice: [e71d82e](https://github.com/hlky/stable-diffusion-webui/commit/e71d82e3a6617c4db00e90a4378a0f14191b5b75) fixed optimized support and also requires the changes in the main repo. [e71d82e](https://github.com/hlky/stable-diffusion-webui/commit/e71d82e3a6617c4db00e90a4378a0f14191b5b75) is synced to main repo too so just pull from main repo :warning:
 
+### :warning: temporary notice: [#229](https://github.com/hlky/stable-diffusion-webui/pull/229) overhauled the UI code [#229](https://github.com/hlky/stable-diffusion-webui/pull/229) is synced to main repo too so just pull from main repo :warning:
+
 ### Questions about **_[Upscalers](https://github.com/hlky/stable-diffusion-webui/wiki/Upscalers)_**?
 ### Questions about **_[Optimized mode](https://github.com/hlky/stable-diffusion-webui/wiki/Optimized-mode)_**?
 
+### Feature request? Use [discussions](https://github.com/hlky/stable-diffusion-webui/discussions)
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/altryne/sd-webui-colab/blob/main/Stable_Diffusion_WebUi_Altryne.ipynb)
 
 ## More documentation about features, troubleshooting, common issues very soon
 ### Want to help with documentation? Documented something? Use [Discussions](https://github.com/hlky/stable-diffusion-webui/discussions)
@@ -109,6 +113,9 @@ Four images will be produced, in this order, all with same seed and each with co
 
 Another example, this time with 5 prompts and 16 variations:
 ![](images/prompt_matrix.jpg)
+
+
+### Prompt combinations 
 
 If you add '@' symbol at start your prompt and change text like this:
 `@(moba|rpg|rts) character (2d|3d) model` it will be produce 3 * 2 combinations or prompt with same seed:
