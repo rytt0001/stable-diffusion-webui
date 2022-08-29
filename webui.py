@@ -678,7 +678,7 @@ def process_images(
     comments = []
 
     prompt_matrix_parts = []
-    if prompt_matrix:
+    if prompt_matrix or prompt.startswith("@"):
         if prompt.startswith("@"):
             all_seeds, n_iter, prompt_matrix_parts, all_prompts, frows = oxlamon_matrix(prompt, seed, n_iter, batch_size)
         else:
