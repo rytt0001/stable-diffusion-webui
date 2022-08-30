@@ -49,7 +49,7 @@ def draw_gradio_ui(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                                     output_txt2img_copy_clipboard = gr.Button("Copy to clipboard").click(fn=None,
                                                                                                          inputs=output_txt2img_gallery,
                                                                                                          outputs=[],
-                                                                                                         _js=js_copy_selected_txt2img)
+                                                                                                         _js=js_copy_to_clipboard('txt2img_gallery_output'))
                                     output_txt2img_copy_to_input_btn = gr.Button("Push to img2img")
                                     if RealESRGAN is not None:
                                         output_txt2img_to_upscale_esrgan = gr.Button("Upscale w/ ESRGAN")
@@ -80,7 +80,7 @@ def draw_gradio_ui(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                                                                    value=txt2img_defaults['submit_on_enter'],
                                                                    interactive=True)
                                 txt2img_submit_on_enter.change(
-                                    lambda x: gr.update(max_lines=1 if x == 'Single' else 25), txt2img_submit_on_enter,
+                                    lambda x: gr.update(max_lines=1 if x == 'Yes' else 25), txt2img_submit_on_enter,
                                     txt2img_prompt)
                             with gr.TabItem('Advanced'):
                                 txt2img_toggles = gr.CheckboxGroup(label='', choices=txt2img_toggles,
@@ -92,6 +92,10 @@ def draw_gradio_ui(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                                                                             visible=RealESRGAN is not None)  # TODO: Feels like I shouldnt slot it in here.
                                 txt2img_ddim_eta = gr.Slider(minimum=0.0, maximum=1.0, step=0.01, label="DDIM ETA",
                                                              value=txt2img_defaults['ddim_eta'], visible=False)
+                                txt2img_variant_amount = gr.Slider(minimum=0.0, maximum=1.0, label='Variation Amount',
+                                                                   value=txt2img_defaults['variant_amount'])
+                                txt2img_variant_seed = gr.Textbox(label="Variant Seed (blank to randomize)", lines=1,
+                                                                  max_lines=1, value=txt2img_defaults["variant_seed"])
                         txt2img_embeddings = gr.File(label="Embeddings file for textual inversion",
                                                      visible=show_embeddings)
 
@@ -99,14 +103,14 @@ def draw_gradio_ui(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                     txt2img,
                     [txt2img_prompt, txt2img_steps, txt2img_sampling, txt2img_toggles, txt2img_realesrgan_model_name,
                      txt2img_ddim_eta, txt2img_batch_count, txt2img_batch_size, txt2img_cfg, txt2img_seed,
-                     txt2img_height, txt2img_width, txt2img_embeddings],
+                     txt2img_height, txt2img_width, txt2img_embeddings, txt2img_variant_amount, txt2img_variant_seed],
                     [output_txt2img_gallery, output_txt2img_seed, output_txt2img_params, output_txt2img_stats]
                 )
                 txt2img_prompt.submit(
                     txt2img,
                     [txt2img_prompt, txt2img_steps, txt2img_sampling, txt2img_toggles, txt2img_realesrgan_model_name,
                      txt2img_ddim_eta, txt2img_batch_count, txt2img_batch_size, txt2img_cfg, txt2img_seed,
-                     txt2img_height, txt2img_width, txt2img_embeddings],
+                     txt2img_height, txt2img_width, txt2img_embeddings, txt2img_variant_amount, txt2img_variant_seed],
                     [output_txt2img_gallery, output_txt2img_seed, output_txt2img_params, output_txt2img_stats]
                 )
 
@@ -126,17 +130,17 @@ def draw_gradio_ui(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                     with gr.Column():
                         gr.Markdown('#### Img2Img input')
                         img2img_image_editor = gr.Image(value=sample_img2img, source="upload", interactive=True,
-                                                        type="pil", tool="select", elem_id="img2img_editor")
+                                                        type="pil", tool="select", elem_id="img2img_editor",
+                                                        image_mode="RGBA")
                         img2img_image_mask = gr.Image(value=sample_img2img, source="upload", interactive=True,
                                                       type="pil", tool="sketch", visible=False,
                                                       elem_id="img2img_mask")
 
                         with gr.Row():
-                            img2img_image_editor_mode = gr.Radio(choices=["Mask", "Crop"], label="Image Editor Mode",
+                            img2img_image_editor_mode = gr.Radio(choices=["Mask", "Crop", "Uncrop"], label="Image Editor Mode",
                                                              value="Crop", elem_id='edit_mode_select')
 
                             img2img_painterro_btn = gr.Button("Advanced Editor")
-                            img2img_copy_from_painterro_btn = gr.Button(value="Get Image from Advanced Editor")
                             img2img_show_help_btn = gr.Button("Show Hints")
                             img2img_hide_help_btn = gr.Button("Hide Hints", visible=False)
                         img2img_help = gr.Markdown(visible=False, value="")
@@ -220,7 +224,7 @@ def draw_gradio_ui(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                     uifn.change_image_editor_mode,
                     [img2img_image_editor_mode, img2img_image_editor, img2img_resize, img2img_width, img2img_height],
                     [img2img_image_editor, img2img_image_mask, img2img_btn_editor, img2img_btn_mask,
-                     img2img_painterro_btn, img2img_copy_from_painterro_btn, img2img_mask, img2img_mask_blur_strength]
+                     img2img_painterro_btn, img2img_mask, img2img_mask_blur_strength]
                 )
 
                 img2img_image_editor.edit(
@@ -245,24 +249,24 @@ def draw_gradio_ui(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                     uifn.copy_img_to_input,
                     [output_txt2img_gallery],
                     [img2img_image_editor, img2img_image_mask, tabs],
-                    _js=js_return_selected_txt2img
+                    _js=js_move_image('txt2img_gallery_output', 'img2img_editor')
                 )
 
                 output_img2img_copy_to_input_btn.click(
                     uifn.copy_img_to_edit,
                     [output_img2img_gallery],
                     [img2img_image_editor, tabs, img2img_image_editor_mode],
-                    _js=js_return_selected_img2img
+                    _js=js_move_image('img2img_gallery_output', 'img2img_editor')
                 )
                 output_img2img_copy_to_mask_btn.click(
                     uifn.copy_img_to_mask,
                     [output_img2img_gallery],
                     [img2img_image_mask, tabs, img2img_image_editor_mode],
-                    _js=js_return_selected_img2img
+                    _js=js_move_image('img2img_gallery_output', 'img2img_editor')
                 )
 
                 output_img2img_copy_to_clipboard_btn.click(fn=None, inputs=output_img2img_gallery, outputs=[],
-                                                           _js=js_copy_selected_img2img)
+                                                           _js=js_copy_to_clipboard('img2img_gallery_output'))
 
                 img2img_btn_mask.click(
                     img2img,
@@ -284,30 +288,7 @@ def draw_gradio_ui(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                 img2img_btn_editor.click(*img2img_submit_params())
                 img2img_prompt.submit(*img2img_submit_params())
 
-                img2img_painterro_btn.click(None, [img2img_image_editor], None, _js="""(img) => {
-                try {
-                    Painterro({
-                        hiddenTools: ['arrow'],
-                        saveHandler: function (image, done) {
-                            localStorage.setItem('painterro-image', image.asDataURL());
-                            done(true);
-                        },
-                    }).show(Array.isArray(img) ? img[0] : img);
-                } catch(e) {
-                    const script = document.createElement('script');
-                    script.src = 'https://unpkg.com/painterro@1.2.78/build/painterro.min.js';
-                    document.head.appendChild(script);
-                    const style = document.createElement('style');
-                    style.appendChild(document.createTextNode('.ptro-holder-wrapper { z-index: 9999 !important; }'));
-                    document.head.appendChild(style);
-                }
-                return [];
-            }""")
-
-                img2img_copy_from_painterro_btn.click(None, None, [img2img_image_editor, img2img_image_mask], _js="""() => {
-                const image = localStorage.getItem('painterro-image')
-                return [image, image];
-            }""")
+                img2img_painterro_btn.click(None, [img2img_image_editor], [img2img_image_editor, img2img_image_mask], _js=js_painterro_launch('img2img_editor'))
 
             if GFPGAN is not None:
                 gfpgan_defaults = {
@@ -353,7 +334,7 @@ def draw_gradio_ui(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                     uifn.copy_img_to_upscale_esrgan,
                     output_txt2img_gallery,
                     [realesrgan_source, tabs],
-                    _js=js_return_selected_txt2img)
+                    _js=js_move_image('txt2img_gallery_output', 'img2img_editor'))
 
         gr.HTML("""
     <div id="90" style="max-width: 100%; font-size: 14px; text-align: center;" class="output-markdown gr-prose border-solid border border-gray-200 rounded gr-panel">
@@ -362,6 +343,12 @@ def draw_gradio_ui(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
         If you would like to contribute to development or test bleeding edge builds, you can visit the <a href="https://github.com/hlky/stable-diffusion-webui" target="_blank">developement repository</a>.</p>
     </div>
     """)
+        # Hack: Detect the load event on the frontend
+        # Won't be needed in the next version of gradio
+        # See the relevant PR: https://github.com/gradio-app/gradio/pull/2108
+        load_detector = gr.Number(value=0, label="Load Detector", visible=False)
+        load_detector.change(None, None, None, _js=js(opt))
+        demo.load(lambda x: 42, inputs=load_detector, outputs=load_detector)
     return demo
 
 
@@ -411,7 +398,7 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                                             output_txt2img_copy_clipboard_history = gr.Button("Copy to clipboard").click(fn=None,
                                                                                                             inputs=output_txt2img_gallery_history,
                                                                                                             outputs=[],
-                                                                                                            _js=js_copy_selected_txt2img_history)
+                                                                                                            _js=js_copy_to_clipboard('txt2img_gallery_output_history'))
                                             output_txt2img_copy_to_input_btn_history = gr.Button("Copy selected image to img2img input")
                                             output_txt2img_to_upscale_esrgan_history = gr.Button("Upscale w/ Upscaler")
                                             output_txt2img_copy_to_gobig_input_btn_history = gr.Button("Copy selected image to goBig input")
@@ -440,7 +427,7 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                                         output_txt2img_copy_clipboard = gr.Button("Copy to clipboard").click(fn=None,
                                                                                                             inputs=output_txt2img_gallery,
                                                                                                             outputs=[],
-                                                                                                            _js=js_copy_selected_txt2img)
+                                                                                                            _js=js_copy_to_clipboard('txt2img_gallery_output'))
                                         output_txt2img_copy_to_input_btn = gr.Button("Push to img2img")
                                         output_txt2img_to_upscale_esrgan = gr.Button("Upscale with Upscaler")
                                         output_txt2img_copy_to_gobig_input_btn = gr.Button("Copy selected image to goBig input")
@@ -465,13 +452,17 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                         with gr.Tabs():
                             with gr.TabItem('Simple'):
                                 txt2img_submit_on_enter = gr.Radio(['Yes', 'No'], label="Submit on enter? (no means multiline)", value=txt2img_defaults['submit_on_enter'], interactive=True)
-                                txt2img_submit_on_enter.change(lambda x: gr.update(max_lines=1 if x == 'Single' else 25) , txt2img_submit_on_enter, txt2img_prompt)
+                                txt2img_submit_on_enter.change(lambda x: gr.update(max_lines=1 if x == 'Yes' else 25) , txt2img_submit_on_enter, txt2img_prompt)
                             with gr.TabItem('Advanced'):
                                 txt2img_togglesBox = gr.CheckboxGroup(label='', choices=txt2img_toggles, value=txt2img_toggle_defaults, type="index")
                                 txt2img_realesrgan_model_type = gr.Dropdown(label='Upscaler type (internal is RealESRGAN)', choices=uifn.upscalers_type, value=uifn.upscalers_type[0])
                                 txt2img_realesrgan_model_name = gr.Dropdown(label='Upscaler model', choices=uifn.internal_esrgan_model, value=uifn.internal_esrgan_model[0]) # TODO: Feels like I shouldnt slot it in here.
                                 txt2img_realesrgan_scale = gr.Slider(minimum=2.0, maximum=4.0, step=1, label="Upscale Ratio", value=4)
                                 txt2img_ddim_eta = gr.Slider(minimum=0.0, maximum=1.0, step=0.01, label="DDIM ETA", value=txt2img_defaults['ddim_eta'], visible=False)
+                                txt2img_variant_amount = gr.Slider(minimum=0.0, maximum=1.0, label='Variation Amount',
+                                                                   value=txt2img_defaults['variant_amount'])
+                                txt2img_variant_seed = gr.Textbox(label="Variant Seed (blank to randomize)", lines=1,
+                                                                  max_lines=1, value=txt2img_defaults["variant_seed"])
                         txt2img_embeddings = gr.File(label="Embeddings file for textual inversion",
                                                      visible=show_embeddings)
 
@@ -493,12 +484,12 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                 )
                 txt2img_btn.click(
                     txt2img,
-                    [txt2img_prompt, txt2img_steps, txt2img_sampling, txt2img_togglesBox, txt2img_realesrgan_model_type,txt2img_realesrgan_model_name,txt2img_realesrgan_scale, txt2img_ddim_eta, txt2img_batch_count, txt2img_batch_size, txt2img_cfgPrecision, txt2img_cfg, txt2img_pcfg,txt2img_goBig_strength,txt2img_goBig_steps, txt2img_seed, txt2img_height, txt2img_width, txt2img_embeddings],
+                    [txt2img_prompt, txt2img_steps, txt2img_sampling, txt2img_togglesBox, txt2img_realesrgan_model_type,txt2img_realesrgan_model_name,txt2img_realesrgan_scale, txt2img_ddim_eta, txt2img_batch_count, txt2img_batch_size, txt2img_cfgPrecision, txt2img_cfg, txt2img_pcfg,txt2img_goBig_strength,txt2img_goBig_steps, txt2img_seed, txt2img_height, txt2img_width, txt2img_embeddings, txt2img_variant_amount, txt2img_variant_seed],
                     [output_txt2img_gallery, output_txt2img_seed, output_txt2img_params, output_txt2img_stats]
                 )
                 txt2img_prompt.submit(
                     txt2img,
-                    [txt2img_prompt, txt2img_steps, txt2img_sampling, txt2img_togglesBox, txt2img_realesrgan_model_type,txt2img_realesrgan_model_name,txt2img_realesrgan_scale, txt2img_ddim_eta, txt2img_batch_count, txt2img_batch_size, txt2img_cfgPrecision, txt2img_cfg, txt2img_pcfg,txt2img_goBig_strength,txt2img_goBig_steps, txt2img_seed, txt2img_height, txt2img_width, txt2img_embeddings],
+                    [txt2img_prompt, txt2img_steps, txt2img_sampling, txt2img_togglesBox, txt2img_realesrgan_model_type,txt2img_realesrgan_model_name,txt2img_realesrgan_scale, txt2img_ddim_eta, txt2img_batch_count, txt2img_batch_size, txt2img_cfgPrecision, txt2img_cfg, txt2img_pcfg,txt2img_goBig_strength,txt2img_goBig_steps, txt2img_seed, txt2img_height, txt2img_width, txt2img_embeddings, txt2img_variant_amount, txt2img_variant_seed],
                     [output_txt2img_gallery, output_txt2img_seed, output_txt2img_params, output_txt2img_stats]
                 )
 
@@ -526,13 +517,13 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                     with gr.Column():
                         gr.Markdown('#### Img2Img input')
                         img2img_image_editor = gr.Image(value=sample_img2img, source="upload", interactive=True,
-                                                        type="pil", tool="select", elem_id="img2img_editor")
+                                                        type="pil", tool="select", elem_id="img2img_editor",image_mode="RGBA")
                         img2img_image_mask = gr.Image(value=sample_img2img, source="upload", interactive=True,
                                                       type="pil", tool="sketch", visible=False,
                                                       elem_id="img2img_mask")
 
                         with gr.Row():
-                            img2img_image_editor_mode = gr.Radio(choices=["Mask", "Crop"], label="Image Editor Mode",
+                            img2img_image_editor_mode = gr.Radio(choices=["Mask", "Crop", "Uncrop"], label="Image Editor Mode",
                                                              value="Crop", elem_id='edit_mode_select')
 
                             img2img_painterro_btn = gr.Button("Advanced Editor")
@@ -641,13 +632,14 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                     uifn.change_image_editor_mode,
                     [img2img_image_editor_mode, img2img_image_editor, img2img_resize, img2img_width, img2img_height],
                     [img2img_image_editor, img2img_image_mask, img2img_btn_editor, img2img_btn_mask,
-                     img2img_painterro_btn, img2img_copy_from_painterro_btn, img2img_mask, img2img_mask_blur_strength]
+                     img2img_painterro_btn, img2img_mask, img2img_mask_blur_strength]
                 )
 
                 img2img_image_editor.edit(
-                    uifn.update_image_mask,
-                    [img2img_image_editor, img2img_resize, img2img_width, img2img_height],
-                    img2img_image_mask
+                    uifn.copy_img_to_input,
+                    [output_txt2img_gallery]
+                    [img2img_image_editor, img2img_image_mask, tabs],
+                    _js=js_move_image('txt2img_gallery_output', 'img2img_editor')
                 )
 
                 img2img_show_help_btn.click(
@@ -666,29 +658,29 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                     uifn.copy_img_to_input,
                     [output_txt2img_gallery],
                     [img2img_image_editor, img2img_image_mask, tabs],
-                    _js=js_return_selected_txt2img
+                    _js=js_move_image('txt2img_gallery_output', 'img2img_editor')
                 )
                 output_txt2img_copy_to_input_btn_history.click(
                     uifn.copy_img_to_input,
                     [output_txt2img_gallery_history],
                     [img2img_image_editor, img2img_image_mask, tabs],
-                    _js=js_return_selected_txt2img_history
+                    _js=js_move_image('txt2img_gallery_output_history', 'img2img_editor')
                 )
                 output_img2img_copy_to_input_btn.click(
                     uifn.copy_img_to_edit,
                     [output_img2img_gallery],
                     [img2img_image_editor, tabs, img2img_image_editor_mode],
-                    _js=js_return_selected_img2img
+                    _js=js_move_image('img2img_gallery_output', 'img2img_editor')
                 )
                 output_img2img_copy_to_mask_btn.click(
                     uifn.copy_img_to_mask,
                     [output_img2img_gallery],
                     [img2img_image_mask, tabs, img2img_image_editor_mode],
-                    _js=js_return_selected_img2img
+                    _js=js_move_image('img2img_gallery_output', 'img2img_editor')
                 )
 
                 output_img2img_copy_to_clipboard_btn.click(fn=None, inputs=output_img2img_gallery, outputs=[],
-                                                           _js=js_copy_selected_img2img)
+                                                           _js=js_copy_to_clipboard('img2img_gallery_output'))
 
                 img2img_btn_mask.click(
                     img2img,
@@ -710,25 +702,8 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                 img2img_btn_editor.click(*img2img_submit_params())
                 img2img_prompt.submit(*img2img_submit_params())
 
-                img2img_painterro_btn.click(None, [img2img_image_editor], None, _js="""(img) => {
-                try {
-                    Painterro({
-                        hiddenTools: ['arrow'],
-                        saveHandler: function (image, done) {
-                            localStorage.setItem('painterro-image', image.asDataURL());
-                            done(true);
-                        },
-                    }).show(Array.isArray(img) ? img[0] : img);
-                } catch(e) {
-                    const script = document.createElement('script');
-                    script.src = 'https://unpkg.com/painterro@1.2.78/build/painterro.min.js';
-                    document.head.appendChild(script);
-                    const style = document.createElement('style');
-                    style.appendChild(document.createTextNode('.ptro-holder-wrapper { z-index: 9999 !important; }'));
-                    document.head.appendChild(style);
-                }
-                return [];
-            }""")
+               img2img_painterro_btn.click(None, [img2img_image_editor], [img2img_image_editor, img2img_image_mask], _js=js_painterro_launch('img2img_editor'))
+
 
                 img2img_copy_from_painterro_btn.click(None, None, [img2img_image_editor, img2img_image_mask], _js="""() => {
                 const image = localStorage.getItem('painterro-image')
@@ -763,7 +738,7 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                 gr.Markdown("Upscale images")
                 with gr.Row():
                     with gr.Column():
-                        realesrgan_source = gr.Image(label="Source", source="upload", interactive=True, type="pil")
+                        realesrgan_source = gr.Image(label="Source", source="upload", interactive=True, type="pil", elem_id="esrgan_img")
                         realesrgan_model_type = gr.Dropdown(label='Upscaler type (internal is RealESRGAN)', choices=uifn.upscalers_type, value=uifn.upscalers_type[0])
                         realesrgan_model_name = gr.Dropdown(label='Upscaler model', choices=uifn.internal_esrgan_model, value=uifn.internal_esrgan_model[0])
                         realesrgan_scale = gr.Slider(minimum=2.0, maximum=4.0, step=1, label="Upscale Ratio", value=4)
@@ -784,19 +759,19 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                     uifn.copy_img_to_upscale_esrgan,
                     output_txt2img_gallery,
                     [realesrgan_source, tabs],
-                    _js=js_return_selected_txt2img
+                    _js=js_move_image('txt2img_gallery_output', 'esrgan_img'))
                 )
                 output_txt2img_to_upscale_esrgan_history.click(
                     uifn.copy_img_to_upscale_esrgan,
                     output_txt2img_gallery_history,
                     [realesrgan_source, tabs],
-                    _js=js_return_selected_txt2img_history
+                    _js=js_move_image('txt2img_gallery_output_history', 'esrgan_img'))
                 )
             with gr.TabItem("goBIG",id="gobig_tab"):
                 gr.Markdown("Upscale and detail images")
                 with gr.Row():
                     with gr.Column():
-                        realesrganGoBig_source = gr.Image(source="upload", interactive=True, type="pil", tool="select")
+                        realesrganGoBig_source = gr.Image(source="upload", interactive=True, type="pil", tool="select", elem_id="gobig_img")
                         realesrganGoBig_model_type = gr.Dropdown(label='Upscaler type (internal is RealESRGAN)', choices=uifn.upscalers_type, value=uifn.upscalers_type[0])
                         realesrganGoBig_model_name = gr.Dropdown(label='Upscaler model', choices=uifn.internal_esrgan_model, value=uifn.internal_esrgan_model[0])
                         realesrganGoBig_prompt = gr.Textbox(label="Prompt",
@@ -824,13 +799,13 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                     uifn.copy_img_to_upscale_gobig,
                     output_txt2img_gallery,
                     [realesrganGoBig_source,tabs],
-                    _js=js_return_selected_txt2img
+                    _js=js_move_image('txt2img_gallery_output', 'gobig_img'))
                 )
                 output_txt2img_copy_to_gobig_input_btn_history.click(
                     uifn.copy_img_to_upscale_gobig,
                     output_txt2img_gallery_history,
                     [realesrganGoBig_source,tabs],
-                    _js=js_return_selected_txt2img_history
+                    _js=js_move_image('txt2img_gallery_output', 'gobig_img'))
                 )
             with gr.TabItem("Parameter History"):
                 def refresh():
@@ -843,13 +818,13 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                 SaveToCsvHistory,
                 output_txt2img_gallery_history,
                 [csv_file],
-                _js=js_save_selected_image_to_csv_history
+                _js=js_save_to_csv_image('txt2img_gallery_output_history')
             )
             output_txt2img_save_to_csv_btn.click(
                 SaveToCsv,
                 output_txt2img_gallery,
                 [csv_file],
-                _js=js_save_selected_image_to_csv
+                _js=js_save_to_csv_image('txt2img_gallery_output')
             )
 
 

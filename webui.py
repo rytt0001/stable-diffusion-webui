@@ -32,10 +32,6 @@ parser.add_argument("--cli", type=str, help="don't launch web server, take Pytho
 parser.add_argument("--scale",type=float,default=10,help="unconditional guidance scale: eps = eps(x, empty) + scale * (eps(x, cond) - eps(x, empty))",)
 opt = parser.parse_args()
 
-# this should force GFPGAN and RealESRGAN onto the selected gpu as well
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
-os.environ["CUDA_VISIBLE_DEVICES"] = str(opt.gpu)
-
 import gradio as gr
 import k_diffusion as K
 import math
@@ -92,7 +88,8 @@ invalid_filename_chars = '<>:"/\|?*\n'
 GFPGAN_dir = opt.gfpgan_dir
 RealESRGAN_dir = opt.realesrgan_dir
 
-
+if opt.optimized_turbo:
+    opt.optimized = True
 
 # should probably be moved to a settings menu in the UI at some point
 grid_format = [s.lower() for s in opt.grid_format.split(':')]
@@ -147,7 +144,17 @@ def load_sd_from_config(ckpt, verbose=False):
     return sd
 
 def crash(e, s):
-    pass
+    #global model
+    #global device
+
+    #print(s, '\n', e)
+
+    #del model
+    #del device
+
+    #print('exiting...calling os._exit(0)')
+    #t = threading.Timer(0.25, os._exit, args=[0])
+    #t.start()
 
 class MemUsageMonitor(threading.Thread):
     stop_flag = False
@@ -184,6 +191,27 @@ class MemUsageMonitor(threading.Thread):
     def read_and_stop(self):
         self.stop_flag = True
         return self.max_usage, self.total
+
+class CFGMaskedDenoiser(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.inner_model = model
+
+    def forward(self, x, sigma, uncond, cond, cond_scale, mask, x0, xi):
+        x_in = x
+        x_in = torch.cat([x_in] * 2)
+        sigma_in = torch.cat([sigma] * 2)
+        cond_in = torch.cat([uncond, cond])
+        uncond, cond = self.inner_model(x_in, sigma_in, cond=cond_in).chunk(2)
+        denoised = uncond + (cond - uncond) * cond_scale
+
+        if mask is not None:
+            assert x0 is not None
+            img_orig = x0
+            mask_inv = 1. - mask
+            denoised = (img_orig * mask_inv) + (mask * denoised)
+
+        return denoised
 
 class CFGDenoiser(nn.Module):
     def __init__(self, model):
@@ -333,7 +361,8 @@ if opt.optimized:
 
     model = instantiate_from_config(config.modelUNet)
     _, _ = model.load_state_dict(sd, strict=False)
-    model.cuda()
+    if not opt.optimized:
+        model.cuda()
     model.eval()
     model.turbo = opt.optimized_turbo
 
@@ -655,7 +684,8 @@ def process_images(
         n_iter, steps, cfg_scale, width, height, prompt_matrix, use_GFPGAN, use_RealESRGAN,use_GoBIG,gstrength,gsteps, upmodel_type, realesrgan_model_name, esrgan_scale,
         fp, ddim_eta=0.0, do_not_save_grid=False, normalize_prompt_weights=True, init_img=None, init_mask=None,
         keep_mask=False, mask_blur_strength=3, denoising_strength=0.75, resize_mode=None, uses_loopback=False,
-        uses_random_seed_loopback=False, sort_samples=True, write_info_files=True, jpg_sample=False):
+        uses_random_seed_loopback=False, sort_samples=True, write_info_files=True, jpg_sample=False,
+        variant_amount=0.0, variant_seed=None):
     """this is the main loop that both txt2img and img2img use; it calls func_init once inside all the scopes and func_sample once per batch"""
     assert prompt is not None
     torch_gc()
@@ -723,10 +753,25 @@ def process_images(
     output_name = []
     output_prompt = []
     output_pixels = []
+    output_variant_seeds =[]
+    output_seeds_base = all_seeds
     tic = time.time()
     for n in range(n_iter):
         with torch.no_grad(), precision_scope("cuda"), (model.ema_scope() if not opt.optimized else nullcontext()):
             init_data = func_init()
+            
+            # if variant_amount > 0.0 create noise from base seed
+            base_x = None
+            
+            if variant_amount > 0.0:
+                target_seed_randomizer = seed_to_int('') # random seed
+                torch.manual_seed(seed) # this has to be the single starting seed (not per-iteration)
+                base_x = create_random_tensors([opt_C, height // opt_f, width // opt_f], seeds=[seed])
+                # we don't want all_seeds to be sequential from starting seed with variants, 
+                # since that makes the same variants each time, 
+                # so we add target_seed_randomizer as a random offset 
+                for si in range(len(all_seeds)):
+                    all_seeds[si] += target_seed_randomizer
             prompts = all_prompts[n * batch_size:(n + 1) * batch_size]
 
             seeds = all_seeds[n * batch_size:(n + 1) * batch_size]
@@ -763,9 +808,22 @@ def process_images(
                 modelCS.to("cpu")
                 while(torch.cuda.memory_allocated()/1e6 >= mem):
                     time.sleep(1)
-
-            # we manually generate all input noises because each one should have a specific seed
-            x = create_random_tensors([opt_C, height // opt_f, width // opt_f], seeds=seeds)
+            if variant_amount == 0.0:
+                # we manually generate all input noises because each one should have a specific seed
+                x = create_random_tensors(shape, seeds=seeds)
+            else: # we are making variants
+                # using variant_seed as sneaky toggle, 
+                # when not None or '' use the variant_seed
+                # otherwise use seeds
+                if variant_seed != None and variant_seed != '':
+                    specified_variant_seed = seed_to_int(variant_seed)
+                    torch.manual_seed(specified_variant_seed)
+                    seeds = [specified_variant_seed]
+                target_x = create_random_tensors(shape, seeds=seeds)
+                # finally, slerp base_x noise to target_x noise for creating a variant
+                x = slerp(device, max(0.0, min(1.0, variant_amount)), base_x, target_x)
+                output_variant_seeds.append(seeds)
+                           
             samples_ddim = func_sample(init_data=init_data, x=x, conditioning=c, unconditional_conditioning=uc, sampler_name=sampler_name)
             if opt.optimized:
                 modelFS.to(device)
@@ -1132,7 +1190,7 @@ skip_grid, sort_samples, sampler_name, ddim_eta, n_iter, batch_size, i, denoisin
     time_diff = time.time()-start_time
 
 
-
+	### variant seeds to consider
     info = f"""
 {prompt}
 Steps: {steps}, Sampler: {sampler_name}, CFG scale: {cfg_scale}, {f'Denoising Strength:{denoising_strength}' if init_img is not None else ''}Size: {width} x {height}, Batch Seed: {all_seeds}{', Denoising strength: '+str(denoising_strength) if init_img is not None else ''}{', GFPGAN: Enabled' if use_GFPGAN else ', GFPGAN: Disabled'}{f', Upscaler:{upmodel_type}'if use_RealESRGAN else ', Upscaler: None'}{f', Model:{realesrgan_model_name}' if use_RealESRGAN else ''}{', Prompt Matrix Mode.' if prompt_matrix else ''}""".strip()
@@ -1161,7 +1219,7 @@ new_isMatrix = False
 is_txt2img =False
 txt2img_prompt=[]
 def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int], upmodel_type, realesrgan_model_name: str,esrgan_scale:int, ddim_eta: float, n_iter: int,
-            batch_size: int,cfg_choice: int, cfg_scale: float,pcfg_scale: float,gstrength: float,gsteps: float, seed: Union[int, str, None], height: int, width: int, fp):
+            batch_size: int,cfg_choice: int, cfg_scale: float,pcfg_scale: float,gstrength: float,gsteps: float, seed: Union[int, str, None], height: int, width: int, fp, variant_amount: float = None, variant_seed: int = None):
     outpath = opt.outdir_txt2img or opt.outdir or "outputs/txt2img-samples"
     err = False
     seed = seed_to_int(seed)
@@ -1249,6 +1307,8 @@ def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int],
             sort_samples=sort_samples,
             write_info_files=write_info_files,
             jpg_sample=jpg_sample,
+            variant_amount=variant_amount,
+            variant_seed=variant_seed,
         )
 
         del sampler
@@ -1384,9 +1444,9 @@ def img2img(prompt: str, image_editor_mode: str, init_info, mask_mode: str, mask
         raise Exception("Unknown sampler: " + sampler_name)
 
 
-    if image_editor_mode == 'Mask':
+   if image_editor_mode == 'Mask':
         init_img = init_info["image"]
-        init_img = init_img.convert("RGB")
+        init_img = init_img.convert("RGBA")
         init_img = resize_image(resize_mode, init_img, width, height)
         init_mask = init_info["mask"]
         init_mask = init_mask.convert("RGB")
@@ -1408,6 +1468,28 @@ def img2img(prompt: str, image_editor_mode: str, init_info, mask_mode: str, mask
         image = image[None].transpose(0, 3, 1, 2)
         image = torch.from_numpy(image)
 
+        mask_channel = None
+        if image_editor_mode == "Uncrop":
+            alpha = init_img.convert("RGBA")
+            alpha = resize_image(resize_mode, alpha, width // 8, height // 8)
+            mask_channel = alpha.split()[-1]
+            mask_channel = mask_channel.filter(ImageFilter.GaussianBlur(4))
+            mask_channel = np.array(mask_channel)
+            mask_channel[mask_channel >= 255] = 255
+            mask_channel[mask_channel < 255] = 0
+            mask_channel = Image.fromarray(mask_channel).filter(ImageFilter.GaussianBlur(2))
+        elif init_mask is not None:
+            alpha = init_mask.convert("RGBA")
+            alpha = resize_image(resize_mode, alpha, width // 8, height // 8)
+            mask_channel = alpha.split()[1]
+
+        mask = None
+        if mask_channel is not None:
+            mask = np.array(mask_channel).astype(np.float32) / 255.0
+            mask = (1 - mask)
+            mask = np.tile(mask, (4, 1, 1))
+            mask = mask[None].transpose(0, 1, 2, 3)
+            mask = torch.from_numpy(mask).to(device)
         if opt.optimized:
             modelFS.to(device)
 
@@ -1422,27 +1504,48 @@ def img2img(prompt: str, image_editor_mode: str, init_info, mask_mode: str, mask
             while(torch.cuda.memory_allocated()/1e6 >= mem):
                 time.sleep(1)
 
-        return init_latent,
+        return init_latent, mask,
 
     def sample(init_data, x, conditioning, unconditional_conditioning, sampler_name):
+        t_enc_steps = t_enc
+        obliterate = False
+        if ddim_steps == t_enc_steps:
+            t_enc_steps = t_enc_steps - 1
+            obliterate = True
+
         if sampler_name != 'DDIM':
-            x0, = init_data
+            x0, z_mask = init_data
 
             sigmas = sampler.model_wrap.get_sigmas(ddim_steps)
-            noise = x * sigmas[ddim_steps - t_enc - 1]
+            noise = x * sigmas[ddim_steps - t_enc_steps - 1]
 
             xi = x0 + noise
-            sigma_sched = sigmas[ddim_steps - t_enc - 1:]
-            model_wrap_cfg = CFGDenoiser(sampler.model_wrap)
-            samples_ddim = K.sampling.__dict__[f'sample_{sampler.get_sampler_name()}'](model_wrap_cfg, xi, sigma_sched, extra_args={'cond': conditioning, 'uncond': unconditional_conditioning, 'cond_scale': cfg_scale}, disable=False)
+
+            # Obliterate masked image
+            if z_mask is not None and obliterate:
+                random = torch.randn(z_mask.shape, device=xi.device)
+                xi = (z_mask * noise) + ((1-z_mask) * xi)
+
+            sigma_sched = sigmas[ddim_steps - t_enc_steps - 1:]
+            model_wrap_cfg = CFGMaskedDenoiser(sampler.model_wrap)
+            samples_ddim = K.sampling.__dict__[f'sample_{sampler.get_sampler_name()}'](model_wrap_cfg, xi, sigma_sched, extra_args={'cond': conditioning, 'uncond': unconditional_conditioning, 'cond_scale': cfg_scale, 'mask': z_mask, 'x0': x0, 'xi': xi}, disable=False)
         else:
-            x0, = init_data
+
+            x0, z_mask = init_data
+
             sampler.make_schedule(ddim_num_steps=ddim_steps, ddim_eta=0.0, verbose=False)
-            z_enc = sampler.stochastic_encode(x0, torch.tensor([t_enc]*batch_size).to(device))
+            z_enc = sampler.stochastic_encode(x0, torch.tensor([t_enc_steps]*batch_size).to(device))
+
+            # Obliterate masked image
+            if z_mask is not None and obliterate:
+                random = torch.randn(z_mask.shape, device=z_enc.device)
+                z_enc = (z_mask * random) + ((1-z_mask) * z_enc)
+
                                 # decode it
-            samples_ddim = sampler.decode(z_enc, conditioning, t_enc,
+            samples_ddim = sampler.decode(z_enc, conditioning, t_enc_steps,
                                             unconditional_guidance_scale=cfg_scale,
-                                            unconditional_conditioning=unconditional_conditioning,)
+                                            unconditional_conditioning=unconditional_conditioning,
+                                            z_mask=z_mask, x0=x0)
         return samples_ddim
 
 
@@ -1614,6 +1717,26 @@ def split_weighted_subprompts(text):
             remaining = 0
     print(f"weight : '{weights}' for text: '{prompts}'")
     return prompts, weights
+    
+def slerp(device, t, v0:torch.Tensor, v1:torch.Tensor, DOT_THRESHOLD=0.9995):
+    v0 = v0.detach().cpu().numpy()
+    v1 = v1.detach().cpu().numpy()
+    
+    dot = np.sum(v0 * v1 / (np.linalg.norm(v0) * np.linalg.norm(v1)))
+    if np.abs(dot) > DOT_THRESHOLD:
+        v2 = (1 - t) * v0 + t * v1
+    else:
+        theta_0 = np.arccos(dot)
+        sin_theta_0 = np.sin(theta_0)
+        theta_t = theta_0 * t
+        sin_theta_t = np.sin(theta_t)
+        s0 = np.sin(theta_0 - theta_t) / sin_theta_0
+        s1 = sin_theta_t / sin_theta_0
+        v2 = s0 * v0 + s1 * v1
+
+    v2 = torch.from_numpy(v2).to(device)
+
+    return v2
 
 def run_GFPGAN(image, strength, autoload = True):
 
@@ -1963,7 +2086,9 @@ txt2img_defaults = {
     'height': 512,
     'width': 512,
     'fp': None,
-    'submit_on_enter': 'Yes'
+    'submit_on_enter': 'Yes',
+    'variant_amount': 0.0,
+    'variant_seed': ''
 }
 
 
