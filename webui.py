@@ -14,6 +14,7 @@ parser.add_argument("--config", type=str, default="configs/stable-diffusion/v1-i
 parser.add_argument("--ckpt", type=str, default="models/ldm/stable-diffusion-v1/model.ckpt", help="path to checkpoint of model",)
 parser.add_argument("--precision", type=str, help="evaluate at this precision", choices=["full", "autocast"], default="autocast")
 parser.add_argument("--optimized", action='store_true', help="load the model onto the device piecemeal instead of all at once to reduce VRAM usage at the cost of performance")
+parser.add_argument("--optimized-turbo", action='store_true', help="alternative optimization mode that does not save as much VRAM but runs siginificantly faster")
 parser.add_argument("--gfpgan-dir", type=str, help="GFPGAN directory", default=('./src/gfpgan' if os.path.exists('./src/gfpgan') else './GFPGAN')) # i disagree with where you're putting it but since all guidefags are doing it this way, there you go
 parser.add_argument("--realesrgan-dir", type=str, help="RealESRGAN directory", default=('./src/realesrgan' if os.path.exists('./src/realesrgan') else './RealESRGAN'))
 parser.add_argument("--realesrgan-model", type=str, help="Upscaling model for RealESRGAN", default=('RealESRGAN_x4plus'))
@@ -23,13 +24,14 @@ parser.add_argument("--no-progressbar-hiding", action='store_true', help="do not
 parser.add_argument("--share", action='store_true', help="Should share your server on gradio.app, this allows you to use the UI from your mobile app", default=False)
 parser.add_argument("--share-password", type=str, help="Sharing is open by default, use this to set a password. Username: webui", default=None)
 parser.add_argument("--defaults", type=str, help="path to configuration file providing UI defaults, uses same format as cli parameter", default='configs/webui/webui.yaml')
-parser.add_argument("--gpu", type=int, help="choose which GPU to use if you have multiple", default=int(os.environ.get('CUDA_VISIBLE_DEVICES', 0)))
+parser.add_argument("--gpu", type=int, help="choose which GPU to use if you have multiple", default=0)
 parser.add_argument("--extra-models-cpu", action='store_true', help="run extra models (GFGPAN/ESRGAN) on cpu", default=False)
+parser.add_argument("--extra-models-gpu", action='store_true', help="run extra models (GFGPAN/ESRGAN) on cpu", default=False)
 parser.add_argument("--esrgan-cpu", action='store_true', help="run ESRGAN on cpu", default=False)
-parser.add_argument("--extern-upscaler", action='store_true', help="run vulkan Upscalers", default=False)
 parser.add_argument("--gfpgan-cpu", action='store_true', help="run GFPGAN on cpu", default=False)
+parser.add_argument("--esrgan-gpu", type=int, help="run ESRGAN on specific gpu (overrides --gpu)", default=0)
+parser.add_argument("--gfpgan-gpu", type=int, help="run GFPGAN on specific gpu (overrides --gpu) ", default=0)
 parser.add_argument("--cli", type=str, help="don't launch web server, take Python function kwargs from this file.", default=None)
-parser.add_argument("--scale",type=float,default=10,help="unconditional guidance scale: eps = eps(x, empty) + scale * (eps(x, cond) - eps(x, empty))",)
 opt = parser.parse_args()
 
 import gradio as gr
@@ -155,6 +157,7 @@ def crash(e, s):
     #print('exiting...calling os._exit(0)')
     #t = threading.Timer(0.25, os._exit, args=[0])
     #t.start()
+    pass
 
 class MemUsageMonitor(threading.Thread):
     stop_flag = False
@@ -432,12 +435,14 @@ def image_grid(imgs, batch_size, force_n_rows=None, captions=None):
 
 def seed_to_int(s):
     if type(s) is int:
+        #print(f"s: {s} ; s_int: {int(s)} typed int")
         return s
     if s is None or s == '':
         return random.randint(0, 2**32 - 1)
     n = abs(int(s) if s.isdigit() else random.Random(s).randint(0, 2**32 - 1))
-    while n >= 2**32:
-        n = n >> 32
+    #print(f"s: {s} ; s_int: {n} from str")
+    #while n >= 2**32:
+    #    n = n >> 32
     return n
 
 def draw_prompt_matrix(im, width, height, all_prompts):
@@ -756,22 +761,24 @@ def process_images(
     output_variant_seeds =[]
     output_seeds_base = all_seeds
     tic = time.time()
-    for n in range(n_iter):
-        with torch.no_grad(), precision_scope("cuda"), (model.ema_scope() if not opt.optimized else nullcontext()):
+    with torch.no_grad(), precision_scope("cuda"), (model.ema_scope() if not opt.optimized else nullcontext()):
+        # if variant_amount > 0.0 create noise from base seed
+        base_x = None
+
+        if variant_amount > 0.0:
+            target_seed_randomizer = seed_to_int('') # random seed
+            #torch.manual_seed(seed) # this has to be the single starting seed (not per-iteration)
+            base_x = create_random_tensors([opt_C, height // opt_f, width // opt_f], seeds=[seed])
+            # we don't want all_seeds to be sequential from starting seed with variants,
+            # since that makes the same variants each time,
+            # so we add target_seed_randomizer as a random offset
+            for si in range(len(all_seeds)):
+                all_seeds[si] += target_seed_randomizer
+
+        for n in range(n_iter):
             init_data = func_init()
             
-            # if variant_amount > 0.0 create noise from base seed
-            base_x = None
-            
-            if variant_amount > 0.0:
-                target_seed_randomizer = seed_to_int('') # random seed
-                torch.manual_seed(seed) # this has to be the single starting seed (not per-iteration)
-                base_x = create_random_tensors([opt_C, height // opt_f, width // opt_f], seeds=[seed])
-                # we don't want all_seeds to be sequential from starting seed with variants, 
-                # since that makes the same variants each time, 
-                # so we add target_seed_randomizer as a random offset 
-                for si in range(len(all_seeds)):
-                    all_seeds[si] += target_seed_randomizer
+
             prompts = all_prompts[n * batch_size:(n + 1) * batch_size]
 
             seeds = all_seeds[n * batch_size:(n + 1) * batch_size]
@@ -817,11 +824,13 @@ def process_images(
                 # otherwise use seeds
                 if variant_seed != None and variant_seed != '':
                     specified_variant_seed = seed_to_int(variant_seed)
-                    torch.manual_seed(specified_variant_seed)
                     seeds = [specified_variant_seed]
                 target_x = create_random_tensors(shape, seeds=seeds)
+                torch.manual_seed(seed)
+                torch.randn(shape, device=device)
                 # finally, slerp base_x noise to target_x noise for creating a variant
                 x = slerp(device, max(0.0, min(1.0, variant_amount)), base_x, target_x)
+                print(f" base seed: [{seed}] ; variant_seed: {seeds} ; variant_amount: {max(0.0, min(1.0, variant_amount))}")
                 output_variant_seeds.append(seeds)
                            
             samples_ddim = func_sample(init_data=init_data, x=x, conditioning=c, unconditional_conditioning=uc, sampler_name=sampler_name)
@@ -853,9 +862,7 @@ def process_images(
                     x_sample = restored_img[:,:,::-1]
                     image = Image.fromarray(x_sample)
                     filename = filename + '-gfpgan'
-                    save_sample(image, sample_path_i, filename, jpg_sample, prompts, seeds, width, height, steps, cfg_scale,
-normalize_prompt_weights, use_GFPGAN, write_info_files, prompt_matrix, init_img, uses_loopback, uses_random_seed_loopback, skip_save,
-skip_grid, sort_samples, sampler_name, ddim_eta, n_iter, batch_size, i, denoising_strength, resize_mode)
+
 
 
                 image = Image.fromarray(x_sample)
@@ -1061,7 +1068,7 @@ skip_grid, sort_samples, sampler_name, ddim_eta, n_iter, batch_size, i, denoisin
                                             # encode (scaled latent)
                                             z_enc = sampler.stochastic_encode(init_latent, torch.tensor([t_enc]*batch_size).to(device))
                                             # decode it
-                                            samples = sampler.decode(z_enc, c, t_enc, unconditional_guidance_scale=opt.scale,
+                                            samples = sampler.decode(z_enc, c, t_enc, unconditional_guidance_scale=gstrength,
                                                                     unconditional_conditioning=uc,)
 
                                             x_samples = model.decode_first_stage(samples)
@@ -1444,7 +1451,7 @@ def img2img(prompt: str, image_editor_mode: str, init_info, mask_mode: str, mask
         raise Exception("Unknown sampler: " + sampler_name)
 
 
-   if image_editor_mode == 'Mask':
+    if image_editor_mode == 'Mask':
         init_img = init_info["image"]
         init_img = init_img.convert("RGBA")
         init_img = resize_image(resize_mode, init_img, width, height)
@@ -1725,7 +1732,9 @@ def slerp(device, t, v0:torch.Tensor, v1:torch.Tensor, DOT_THRESHOLD=0.9995):
     dot = np.sum(v0 * v1 / (np.linalg.norm(v0) * np.linalg.norm(v1)))
     if np.abs(dot) > DOT_THRESHOLD:
         v2 = (1 - t) * v0 + t * v1
+        #v2 = v0#(1 - t) * v0 + t * v1
     else:
+        print("there")
         theta_0 = np.arccos(dot)
         sin_theta_0 = np.sin(theta_0)
         theta_t = theta_0 * t
@@ -2001,7 +2010,7 @@ def run_goBIG(image, upmodel_type, model_name: str, gstrength:float, gsteps:int,
                                             # encode (scaled latent)
                                             z_enc = sampler.stochastic_encode(init_latent, torch.tensor([t_enc]*batch_size).to(device))
                                             # decode it
-                                            samples = sampler.decode(z_enc, c, t_enc, unconditional_guidance_scale=opt.scale,
+                                            samples = sampler.decode(z_enc, c, t_enc, unconditional_guidance_scale=gstrength,
                                                                     unconditional_conditioning=uc,)
 
                                             x_samples = model.decode_first_stage(samples)

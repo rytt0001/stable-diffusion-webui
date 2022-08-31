@@ -1,6 +1,7 @@
 import gradio as gr
 from frontend.css_and_js import *
 from frontend.css_and_js import css
+from frontend.css_and_js import js
 import frontend.ui_functions as uifn
 
 def draw_gradio_ui(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaults={}, RealESRGAN=True, GFPGAN=True,
@@ -605,16 +606,7 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
 
 
 
-                    with gr.Column():
-                        output_img2img_gallery = gr.Gallery(label="Images")
-                        output_img2img_select_image = gr.Number(label='Select image number from results for copying', value=1, precision=None)
-                        gr.Markdown("Clear the input image before copying your output to your input. It may take some time to load the image.")
-                        output_img2img_copy_to_input_btn = gr.Button("Copy selected image to input")
 
-
-                        output_img2img_seed = gr.Number(label='Seed')
-                        output_img2img_params = gr.Textbox(label="Copy-paste generation parameters")
-                        output_img2img_stats = gr.HTML(label='Stats')
 
 
                 img2img_realesrgan_model_type.change(
@@ -637,7 +629,7 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
 
                 img2img_image_editor.edit(
                     uifn.copy_img_to_input,
-                    [output_txt2img_gallery]
+                    output_txt2img_gallery,
                     [img2img_image_editor, img2img_image_mask, tabs],
                     _js=js_move_image('txt2img_gallery_output', 'img2img_editor')
                 )
@@ -656,25 +648,25 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
 
                 output_txt2img_copy_to_input_btn.click(
                     uifn.copy_img_to_input,
-                    [output_txt2img_gallery],
+                    output_txt2img_gallery,
                     [img2img_image_editor, img2img_image_mask, tabs],
                     _js=js_move_image('txt2img_gallery_output', 'img2img_editor')
                 )
                 output_txt2img_copy_to_input_btn_history.click(
                     uifn.copy_img_to_input,
-                    [output_txt2img_gallery_history],
+                    output_txt2img_gallery_history,
                     [img2img_image_editor, img2img_image_mask, tabs],
                     _js=js_move_image('txt2img_gallery_output_history', 'img2img_editor')
                 )
                 output_img2img_copy_to_input_btn.click(
                     uifn.copy_img_to_edit,
-                    [output_img2img_gallery],
+                    output_img2img_gallery,
                     [img2img_image_editor, tabs, img2img_image_editor_mode],
                     _js=js_move_image('img2img_gallery_output', 'img2img_editor')
                 )
                 output_img2img_copy_to_mask_btn.click(
                     uifn.copy_img_to_mask,
-                    [output_img2img_gallery],
+                    output_img2img_gallery,
                     [img2img_image_mask, tabs, img2img_image_editor_mode],
                     _js=js_move_image('img2img_gallery_output', 'img2img_editor')
                 )
@@ -702,7 +694,7 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                 img2img_btn_editor.click(*img2img_submit_params())
                 img2img_prompt.submit(*img2img_submit_params())
 
-               img2img_painterro_btn.click(None, [img2img_image_editor], [img2img_image_editor, img2img_image_mask], _js=js_painterro_launch('img2img_editor'))
+                img2img_painterro_btn.click(None, [img2img_image_editor], [img2img_image_editor, img2img_image_mask], _js=js_painterro_launch('img2img_editor'))
 
 
                 img2img_copy_from_painterro_btn.click(None, None, [img2img_image_editor, img2img_image_mask], _js="""() => {
@@ -759,13 +751,13 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                     uifn.copy_img_to_upscale_esrgan,
                     output_txt2img_gallery,
                     [realesrgan_source, tabs],
-                    _js=js_move_image('txt2img_gallery_output', 'esrgan_img'))
+                    _js=js_move_image('txt2img_gallery_output', 'esrgan_img')
                 )
                 output_txt2img_to_upscale_esrgan_history.click(
                     uifn.copy_img_to_upscale_esrgan,
                     output_txt2img_gallery_history,
                     [realesrgan_source, tabs],
-                    _js=js_move_image('txt2img_gallery_output_history', 'esrgan_img'))
+                    _js=js_move_image('txt2img_gallery_output_history', 'esrgan_img')
                 )
             with gr.TabItem("goBIG",id="gobig_tab"):
                 gr.Markdown("Upscale and detail images")
@@ -799,13 +791,13 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                     uifn.copy_img_to_upscale_gobig,
                     output_txt2img_gallery,
                     [realesrganGoBig_source,tabs],
-                    _js=js_move_image('txt2img_gallery_output', 'gobig_img'))
+                    _js=js_move_image('txt2img_gallery_output', 'gobig_img')
                 )
                 output_txt2img_copy_to_gobig_input_btn_history.click(
                     uifn.copy_img_to_upscale_gobig,
                     output_txt2img_gallery_history,
                     [realesrganGoBig_source,tabs],
-                    _js=js_move_image('txt2img_gallery_output', 'gobig_img'))
+                    _js=js_move_image('txt2img_gallery_output', 'gobig_img')
                 )
             with gr.TabItem("Parameter History"):
                 def refresh():
@@ -829,5 +821,11 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
 
 
 
-    demo.queue(concurrency_count=1)
+        # Hack: Detect the load event on the frontend
+        # Won't be needed in the next version of gradio
+        # See the relevant PR: https://github.com/gradio-app/gradio/pull/2108
+        load_detector = gr.Number(value=0, label="Load Detector", visible=False)
+        load_detector.change(None, None, None, _js=js(opt))
+        demo.load(lambda x: 42, inputs=load_detector, outputs=load_detector)
+        demo.queue(concurrency_count=1)
     return demo
