@@ -690,15 +690,17 @@ def process_images(
         fp, ddim_eta=0.0, do_not_save_grid=False, normalize_prompt_weights=True, init_img=None, init_mask=None,
         keep_mask=False, mask_blur_strength=3, denoising_strength=0.75, resize_mode=None, uses_loopback=False,
         uses_random_seed_loopback=False, sort_samples=True, write_info_files=True, jpg_sample=False,
-        variant_amount=0.0, variant_seed=None):
+        variant_amount=0.0, variant_seed=None,variant_step: int = None):
     """this is the main loop that both txt2img and img2img use; it calls func_init once inside all the scopes and func_sample once per batch"""
     assert prompt is not None
     torch_gc()
     # start time after garbage collection (or before?)
     start_time = time.time()
-
+    variant_step = 0 if variant_seed is None or variant_seed == '' else variant_step
     mem_mon = MemUsageMonitor('MemMon')
     mem_mon.start()
+    global is_txt2img
+    is_txt2img = False
 
     if hasattr(model, "embedding_manager"):
         load_embeddings(fp)
@@ -758,15 +760,17 @@ def process_images(
     output_name = []
     output_prompt = []
     output_pixels = []
-    output_variant_seeds =[]
+    output_variant_seeds = []
+    output_variant_seed = -1
     output_seeds_base = all_seeds
     tic = time.time()
     with torch.no_grad(), precision_scope("cuda"), (model.ema_scope() if not opt.optimized else nullcontext()):
         # if variant_amount > 0.0 create noise from base seed
         base_x = None
 
-        if variant_amount > 0.0:
+        if variant_amount+variant_step > 0.0:
             target_seed_randomizer = seed_to_int('') # random seed
+            output_variant_seed = target_seed_randomizer
             #torch.manual_seed(seed) # this has to be the single starting seed (not per-iteration)
             base_x = create_random_tensors([opt_C, height // opt_f, width // opt_f], seeds=[seed])
             # we don't want all_seeds to be sequential from starting seed with variants,
@@ -777,7 +781,7 @@ def process_images(
 
         for n in range(n_iter):
             init_data = func_init()
-            
+
 
             prompts = all_prompts[n * batch_size:(n + 1) * batch_size]
 
@@ -815,9 +819,12 @@ def process_images(
                 modelCS.to("cpu")
                 while(torch.cuda.memory_allocated()/1e6 >= mem):
                     time.sleep(1)
-            if variant_amount == 0.0:
-                # we manually generate all input noises because each one should have a specific seed
-                x = create_random_tensors(shape, seeds=seeds)
+            if variant_amount+(n*variant_step) == 0.0:
+                if base_x is None:
+                    # we manually generate all input noises because each one should have a specific seed
+                    x = create_random_tensors(shape, seeds=seeds)
+                else:
+                    x = base_x
             else: # we are making variants
                 # using variant_seed as sneaky toggle, 
                 # when not None or '' use the variant_seed
@@ -825,13 +832,15 @@ def process_images(
                 if variant_seed != None and variant_seed != '':
                     specified_variant_seed = seed_to_int(variant_seed)
                     seeds = [specified_variant_seed]
+                    output_variant_seed = specified_variant_seed
                 target_x = create_random_tensors(shape, seeds=seeds)
                 torch.manual_seed(seed)
                 torch.randn(shape, device=device)
+                var_total = round(variant_amount+ (n*variant_step),2)
                 # finally, slerp base_x noise to target_x noise for creating a variant
-                x = slerp(device, max(0.0, min(1.0, variant_amount)), base_x, target_x)
-                print(f" base seed: [{seed}] ; variant_seed: {seeds} ; variant_amount: {max(0.0, min(1.0, variant_amount))}")
-                output_variant_seeds.append(seeds)
+                x = slerp(device, max(0.0, min(1.0, var_total)), base_x, target_x)
+                print(f" base seed: [{seed}] ; variant_seed: {seeds} ; variant_amount: {max(0.0, min(1.0, var_total))}")
+                output_variant_seeds.append(seeds[0])
                            
             samples_ddim = func_sample(init_data=init_data, x=x, conditioning=c, unconditional_conditioning=uc, sampler_name=sampler_name)
             if opt.optimized:
@@ -879,7 +888,8 @@ def process_images(
 
                         #DynamicLoad_RealESRGAN(realesrgan_model_name)
                         #if opt.extern_upscaler:
-                        init_img = run_RealESRGAN(init_image,upmodel_type, realesrgan_model_name, True, 'RGB',esrgan_scale)
+                        image = run_RealESRGAN(image,upmodel_type, realesrgan_model_name, True, 'RGB',esrgan_scale)
+                        init_img = run_RealESRGAN(init_img,upmodel_type, realesrgan_model_name, True, 'RGB',esrgan_scale)
                         init_mask = run_RealESRGAN(init_mask,upmodel_type,realesrgan_model_name, True, 'L',esrgan_scale)
                         #else:
                         #    output, img_mode = RealESRGAN.enhance(np.array(init_img, dtype=np.uint8),outscale=esrgan_scale)
@@ -1149,10 +1159,12 @@ def process_images(
 
 
         grid_count += 1
-    global is_txt2img
+
     if is_txt2img:
         global txt2img_prompt
+        global txt2img_varSeed
         txt2img_prompt = output_prompt
+        txt2img_varSeed = output_variant_seed
     if opt.optimized:
         mem = torch.cuda.memory_allocated()/1e6
         modelFS.to("cpu")
@@ -1200,7 +1212,7 @@ def process_images(
 	### variant seeds to consider
     info = f"""
 {prompt}
-Steps: {steps}, Sampler: {sampler_name}, CFG scale: {cfg_scale}, {f'Denoising Strength:{denoising_strength}' if init_img is not None else ''}Size: {width} x {height}, Batch Seed: {all_seeds}{', Denoising strength: '+str(denoising_strength) if init_img is not None else ''}{', GFPGAN: Enabled' if use_GFPGAN else ', GFPGAN: Disabled'}{f', Upscaler:{upmodel_type}'if use_RealESRGAN else ', Upscaler: None'}{f', Model:{realesrgan_model_name}' if use_RealESRGAN else ''}{', Prompt Matrix Mode.' if prompt_matrix else ''}""".strip()
+Steps: {steps}, Sampler: {sampler_name}, CFG scale: {cfg_scale}, {f'Denoising Strength:{denoising_strength}' if init_img is not None else ''}Size: {width} x {height}{f', Batch Seed: {all_seeds}' if variant_amount==0.0 else f', Base Seed: {seed} | variant seeds: {output_variant_seeds}, variation stregth:{variant_amount}'}{', Denoising strength: '+str(denoising_strength) if init_img is not None else ''}{', GFPGAN: Enabled' if use_GFPGAN else ', GFPGAN: Disabled'}{f', Upscaler:{upmodel_type}'if use_RealESRGAN else ', Upscaler: None'}{f', Model:{realesrgan_model_name}' if use_RealESRGAN else ''}{', Prompt Matrix Mode.' if prompt_matrix else ''}""".strip()
     stats = f'''
 Took { round(time_diff, 2) }s total ({ round(time_diff/(len(all_prompts)),2) }s per image)
 Peak memory usage: { -(mem_max_used // -1_048_576) } MiB / { -(mem_total // -1_048_576) } MiB / { round(mem_max_used/mem_total*100, 3) }%'''
@@ -1215,20 +1227,24 @@ Peak memory usage: { -(mem_max_used // -1_048_576) } MiB / { -(mem_total // -1_0
     return output_images, seed, info, stats, prompt_matrix
 
 
-old_images = []
-new_images = []
+old_images = None
+new_images = None
 old_info = f""
 new_info = f""
-old_params = []
-new_params = []
+old_params = None
+new_params = None
 old_isMatrix = False
 new_isMatrix = False
 is_txt2img =False
 txt2img_prompt=[]
+txt2img_varSeed = []
+random_seed = None
 def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int], upmodel_type, realesrgan_model_name: str,esrgan_scale:int, ddim_eta: float, n_iter: int,
-            batch_size: int,cfg_choice: int, cfg_scale: float,pcfg_scale: float,gstrength: float,gsteps: float, seed: Union[int, str, None], height: int, width: int, fp, variant_amount: float = None, variant_seed: int = None):
+            batch_size: int,cfg_choice: int, cfg_scale: float,pcfg_scale: float,gstrength: float,gsteps: float, seed: Union[int, str, None], height: int, width: int, fp, variant_amount: float = None, variant_seed: int = None, variant_step: int = None):
     outpath = opt.outdir_txt2img or opt.outdir or "outputs/txt2img-samples"
     err = False
+    global random_seed
+    random_seed = seed == ''
     seed = seed_to_int(seed)
 
     prompt_matrix = 0 in toggles
@@ -1270,9 +1286,11 @@ def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int],
     global old_params
     global new_params
     global new_isMatrix
+    global txt2img_varSeed
 
     new_images = []
     new_info = []
+
 
     def init():
         global is_txt2img
@@ -1316,13 +1334,14 @@ def txt2img(prompt: str, ddim_steps: int, sampler_name: str, toggles: List[int],
             jpg_sample=jpg_sample,
             variant_amount=variant_amount,
             variant_seed=variant_seed,
+            variant_step=variant_step
         )
 
         del sampler
         new_images = output_images
         new_info = info
 
-        new_params = (prompt, ddim_steps, sampler_name, toggles, realesrgan_model_name, ddim_eta, n_iter, batch_size, cfg_choice, cfg_scale, pcfg_scale, height, width, fp, seed )
+        new_params = (prompt, ddim_steps, sampler_name, toggles, realesrgan_model_name, ddim_eta, n_iter, batch_size, cfg_choice, cfg_scale, pcfg_scale, height, width, fp, seed, variant_amount, txt2img_varSeed, variant_seed != None and variant_seed != '', variant_step)
         if new_isMatrix:
             global txt2img_prompt
             new_params = (txt2img_prompt,) + (new_params[1:])
@@ -1364,10 +1383,7 @@ def SaveToCsv(image_id_array, use_history=False):
     processed_image = Image.open(BytesIO(base64.b64decode(image_data)))
     if processed_image is None:
         return
-    global old_params
-    global new_params
-    global old_isMatrix
-    global new_isMatrix
+
     os.makedirs("log/images", exist_ok=True)
         # those must match the "txt2img" function !! + images, seed, comment, stats !! NOTE: changes to UI output must be reflected here too
 
@@ -1378,17 +1394,20 @@ def SaveToCsv(image_id_array, use_history=False):
     isMatrix = new_isMatrix if not use_history else old_isMatrix
     savedImgs = processed_image
     params = new_params if not use_history else old_params
-    prompt, ddim_steps, sampler_name, toggles, realesrgan_model_name, ddim_eta, n_iter, batch_size, cfg_choice, cfg_scale, pcfg_scale, height, width, fp, seed = params
+    prompt, ddim_steps, sampler_name, toggles, realesrgan_model_name, ddim_eta, n_iter, batch_size, cfg_choice, cfg_scale, pcfg_scale, height, width, fp, seed, var_amount, var_seed, specified_var_seed, var_step = params
     if isMatrix:
         prompt = prompt[index]
     seed = seed+(index) if not isMatrix else seed
+    variant_seed = seed + var_seed if not specified_var_seed else var_seed
+    variant_amount = max(0.0,min(1.0,var_amount+(index*var_step)))
+    is_variant = var_amount != 0.0
     cfg = cfg_scale if cfg_choice == 0 else pcfg_scale
     with open("log/Resultlog.csv", "a", encoding="utf8", newline='') as file:
 
         at_start = file.tell() == 0
         writer = csv.writer(file, delimiter =",")
         if at_start:
-            writer.writerow(["prompt", "seed", "width", "height", "sampler", "toggles", "n_iter", "n_samples", "cfg_scale", "steps", "filename", "RealESRGAN name"])
+            writer.writerow(["prompt", "seed", "width", "height", "sampler", "toggles", "n_iter", "n_samples", "cfg_scale", "steps", "filename", "RealESRGAN name", "is_variant", "variant_amount", "variant_seed"])
 
         filename_base = str(int(time.time() * 1000))
 
@@ -1402,7 +1421,7 @@ def SaveToCsv(image_id_array, use_history=False):
 
         use_RealESRGAN = 8 in toggles
 
-        writer.writerow([prompt if prompt else " ", seed, width, height, sampler_name, toggles, n_iter, batch_size, cfg, ddim_steps, filename, realesrgan_model_name if use_RealESRGAN else 'Disabled'])
+        writer.writerow([prompt if prompt else "", seed, width, height, sampler_name, toggles, n_iter, batch_size, cfg, ddim_steps, filename, realesrgan_model_name if use_RealESRGAN else 'Disabled', "Yes" if is_variant else "No", variant_amount if is_variant else "", variant_seed if is_variant else ""])
     print("Parameter Saved")
     return gr.update(value ="log/Resultlog.csv")
 
@@ -2161,6 +2180,32 @@ img2img_resize_modes = [
 ]
 
 
+def reloadParams():
+
+    #txt2img_prompt, txt2img_steps, txt2img_sampling, txt2img_togglesBox, txt2img_realesrgan_model_type,txt2img_realesrgan_model_name,txt2img_realesrgan_scale, txt2img_ddim_eta, txt2img_batch_count, txt2img_batch_size,
+    #txt2img_cfgPrecision, txt2img_cfg, txt2img_pcfg,txt2img_goBig_strength,txt2img_goBig_steps, txt2img_seed, txt2img_height, txt2img_width, txt2img_embeddings, txt2img_variant_amount,
+    #txt2img_variant_seed,txt2img_variant_step,output_txt2img_gallery, output_txt2img_params, output_txt2img_gallery_history,output_txt2img_params_history
+    global new_params
+    global new_isMatrix
+    global old_images
+    global new_images
+    global old_info
+    global new_info
+    global random_seed
+    if new_params is None:
+        return [gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()]
+    isMatrix = new_isMatrix
+    prompt, ddim_steps, sampler_name, toggles, realesrgan_model_name, ddim_eta, n_iter, batch_size, cfg_choice, cfg_scale, pcfg_scale, height, width, fp, seed, var_amount, var_seed, specified_var_seed, var_step = new_params
+
+
+    if isMatrix:
+        prompt = f"@{prompt[0]}"
+    variant_seed = '' if not specified_var_seed else var_seed
+    variant_amount = max(0.0,min(1.0,var_amount))
+    seed = '' if random_seed else seed
+    togglestr = [txt2img_toggles[i] for i in toggles]
+    return [gr.update(value=prompt), gr.update(value=ddim_steps), gr.update(value=sampler_name), gr.update(value=togglestr), gr.update(), gr.update(), gr.update(value=4), gr.update(value=ddim_eta), gr.update(value=n_iter), gr.update(value=batch_size), gr.update(value='Normal' if cfg_choice==0 else 'Precise'), gr.update(value=cfg_scale), gr.update(value=pcfg_scale), gr.update(), gr.update(), gr.update(value=seed), gr.update(value=height), gr.update(value=width), gr.update(value=fp), gr.update(value=variant_amount), gr.update(value=variant_seed), gr.update(value=var_step), gr.update(value=new_images), gr.update(value=new_info), gr.update(value=old_images), gr.update(value=old_info)]
+
 demo = draw_ui_custom(opt,
                       user_defaults=user_defaults,
                       txt2img=txt2img,
@@ -2182,7 +2227,8 @@ demo = draw_ui_custom(opt,
                       run_goBIG=run_goBIG,
                       SaveToHistory=SaveToHistory,
                       SaveToCsv=SaveToCsv,
-                      SaveToCsvHistory=SaveToCsvHistory
+                      SaveToCsvHistory=SaveToCsvHistory,
+                      reloadParams=reloadParams
                     )
 
 

@@ -97,6 +97,7 @@ def draw_gradio_ui(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                                                                    value=txt2img_defaults['variant_amount'])
                                 txt2img_variant_seed = gr.Textbox(label="Variant Seed (blank to randomize)", lines=1,
                                                                   max_lines=1, value=txt2img_defaults["variant_seed"])
+
                         txt2img_embeddings = gr.File(label="Embeddings file for textual inversion",
                                                      visible=show_embeddings)
 
@@ -353,10 +354,11 @@ def draw_gradio_ui(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
     return demo
 
 
+
 def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaults={}, RealESRGAN=True, GFPGAN=True,
                    txt2img_toggles={}, txt2img_toggle_defaults='k_euler', show_embeddings=False, img2img_defaults={},
                    img2img_toggles={}, img2img_toggle_defaults={}, sample_img2img=None, img2img_mask_modes=None,
-                   img2img_resize_modes=None, user_defaults={}, run_GFPGAN=lambda x: x, run_RealESRGAN=lambda x: x, run_goBIG=lambda x: x, SaveToHistory=lambda x: x, SaveToCsv=lambda x: x, SaveToCsvHistory=lambda x: x):
+                   img2img_resize_modes=None, user_defaults={}, run_GFPGAN=lambda x: x, run_RealESRGAN=lambda x: x, run_goBIG=lambda x: x, SaveToHistory=lambda x: x, SaveToCsv=lambda x: x, SaveToCsvHistory=lambda x: x, reloadParams = lambda x: x):
     with gr.Blocks(css=css(opt), analytics_enabled=False, title="Stable Diffusion WebUI") as demo:
         with gr.Tabs(elem_id='tabss') as tabs:
             with gr.TabItem("Stable Diffusion Text-to-Image Unified", id='txt2img_tab'):
@@ -382,7 +384,7 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                         txt2img_batch_size = gr.Slider(minimum=1, maximum=8, step=1, label='Batch size (how many images are in a batch; memory-hungry)', value=txt2img_defaults['batch_size'])
                         txt2img_goBig_strength = gr.Slider(minimum=0.0, maximum=1.0, step=0.01, label='GoBIG Detail Enhancment (Lower will look more like the original)', value=0.3,interactive=True,visible=False)
                         txt2img_goBig_steps = gr.Slider(minimum=1, maximum=300, step=1, label='GoBIG Sampling Steps', value=150,interactive=True, visible=False)
-
+                        txt2img_reloadParam_btn = gr.Button("Reload Parameter saved in server RAM")
                     with gr.Column():
                         output_txt2img_history = gr.Box()
 
@@ -462,6 +464,8 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                                 txt2img_ddim_eta = gr.Slider(minimum=0.0, maximum=1.0, step=0.01, label="DDIM ETA", value=txt2img_defaults['ddim_eta'], visible=False)
                                 txt2img_variant_amount = gr.Slider(minimum=0.0, maximum=1.0, label='Variation Amount',
                                                                    value=txt2img_defaults['variant_amount'])
+                                txt2img_variant_step = gr.Slider(minimum=0.0, maximum=1.0,label="Variation steps (will be added to variation amount for each iteration only if Variant seed is provided)",
+                                                                  value=0.0)
                                 txt2img_variant_seed = gr.Textbox(label="Variant Seed (blank to randomize)", lines=1,
                                                                   max_lines=1, value=txt2img_defaults["variant_seed"])
                         txt2img_embeddings = gr.File(label="Embeddings file for textual inversion",
@@ -485,12 +489,12 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                 )
                 txt2img_btn.click(
                     txt2img,
-                    [txt2img_prompt, txt2img_steps, txt2img_sampling, txt2img_togglesBox, txt2img_realesrgan_model_type,txt2img_realesrgan_model_name,txt2img_realesrgan_scale, txt2img_ddim_eta, txt2img_batch_count, txt2img_batch_size, txt2img_cfgPrecision, txt2img_cfg, txt2img_pcfg,txt2img_goBig_strength,txt2img_goBig_steps, txt2img_seed, txt2img_height, txt2img_width, txt2img_embeddings, txt2img_variant_amount, txt2img_variant_seed],
+                    [txt2img_prompt, txt2img_steps, txt2img_sampling, txt2img_togglesBox, txt2img_realesrgan_model_type,txt2img_realesrgan_model_name,txt2img_realesrgan_scale, txt2img_ddim_eta, txt2img_batch_count, txt2img_batch_size, txt2img_cfgPrecision, txt2img_cfg, txt2img_pcfg,txt2img_goBig_strength,txt2img_goBig_steps, txt2img_seed, txt2img_height, txt2img_width, txt2img_embeddings, txt2img_variant_amount, txt2img_variant_seed,txt2img_variant_step],
                     [output_txt2img_gallery, output_txt2img_seed, output_txt2img_params, output_txt2img_stats]
                 )
                 txt2img_prompt.submit(
                     txt2img,
-                    [txt2img_prompt, txt2img_steps, txt2img_sampling, txt2img_togglesBox, txt2img_realesrgan_model_type,txt2img_realesrgan_model_name,txt2img_realesrgan_scale, txt2img_ddim_eta, txt2img_batch_count, txt2img_batch_size, txt2img_cfgPrecision, txt2img_cfg, txt2img_pcfg,txt2img_goBig_strength,txt2img_goBig_steps, txt2img_seed, txt2img_height, txt2img_width, txt2img_embeddings, txt2img_variant_amount, txt2img_variant_seed],
+                    [txt2img_prompt, txt2img_steps, txt2img_sampling, txt2img_togglesBox, txt2img_realesrgan_model_type,txt2img_realesrgan_model_name,txt2img_realesrgan_scale, txt2img_ddim_eta, txt2img_batch_count, txt2img_batch_size, txt2img_cfgPrecision, txt2img_cfg, txt2img_pcfg,txt2img_goBig_strength,txt2img_goBig_steps, txt2img_seed, txt2img_height, txt2img_width, txt2img_embeddings, txt2img_variant_amount, txt2img_variant_seed,txt2img_variant_step],
                     [output_txt2img_gallery, output_txt2img_seed, output_txt2img_params, output_txt2img_stats]
                 )
 
@@ -500,6 +504,11 @@ def draw_ui_custom(opt, img2img=lambda x: x, txt2img=lambda x: x, txt2img_defaul
                     None,
                     [output_txt2img_gallery_history,output_txt2img_params_history]
                 )
+                txt2img_reloadParam_btn.click(
+                    reloadParams,
+                    None,
+                    [txt2img_prompt, txt2img_steps, txt2img_sampling, txt2img_togglesBox, txt2img_realesrgan_model_type,txt2img_realesrgan_model_name,txt2img_realesrgan_scale, txt2img_ddim_eta, txt2img_batch_count, txt2img_batch_size, txt2img_cfgPrecision, txt2img_cfg, txt2img_pcfg,txt2img_goBig_strength,txt2img_goBig_steps, txt2img_seed, txt2img_height, txt2img_width, txt2img_embeddings, txt2img_variant_amount, txt2img_variant_seed,txt2img_variant_step,output_txt2img_gallery, output_txt2img_params, output_txt2img_gallery_history,output_txt2img_params_history]
+                    )
 
 
             with gr.TabItem("Stable Diffusion Image-to-Image Unified", id="img2img_tab"):
